@@ -23,6 +23,11 @@ Installation
 
 Release Notes
 -------------
+To download the desired files, first create a geometry file (such as a geopackage) with a polygon depicting the area of interest.  Then run the following commands:
+  
+  > from nbs.bluetopo import fetch_tiles
+  
+  > fetch_tiles.main('area_of_interest.gpkg', r'C:\download_path')
 
 Authors
 -------
