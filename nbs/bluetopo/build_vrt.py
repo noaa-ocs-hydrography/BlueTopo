@@ -298,6 +298,8 @@ def group_available_tiles(available_tiles: dict, bluetopo_path: str, vrt_tile_pa
         if region not in region_map:
             region_map[region] = {}
         region_map[region][cell_name] = tile_map[cell_name]
+    intersection = None
+    os.remove(grouped_filename)
     return region_map
 
 
@@ -419,7 +421,7 @@ def add_vrt_rat(bluetopo_path: str, vrt_path: str) -> None:
     vrt_ds = None
 
 
-def main(bluetopo_path:str, vrt_tile_path: str = '../data/vrt_tiles.gpkg') -> None:
+def main(bluetopo_path:str) -> None:
     """
     Build a gdal VRT for all available tiles.  This VRT is a collection of smaller areas described as VRTs.  Nominally
     4 meter data is collected with overviews, and 8 meter data is also collected with an overview.  These data are then
@@ -431,13 +433,11 @@ def main(bluetopo_path:str, vrt_tile_path: str = '../data/vrt_tiles.gpkg') -> No
     bluetopo_path
         the path to BlueTopo tiles as downloaded by the fetch_tiles script.
 
-    vrt_tile_path
-        the tiling system to use for building sub-tile aggregates.  Must have a naming system in field "CellName".
-
     Returns
     -------
     None
     """
+    vrt_tile_path = os.path.join(os.path.dirname(__file__), 'data/vrt_tiles.gpkg')
     print(f'Beginning work on {bluetopo_path}')
     start = datetime.datetime.now()
     available_tiles = get_available_tiles(bluetopo_path)
