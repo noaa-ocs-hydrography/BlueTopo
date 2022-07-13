@@ -246,7 +246,7 @@ def group_available_tiles(available_tiles: dict, bluetopo_path: str, vrt_tile_pa
         A dictionary of vrt subregion names pointing to a list of bluetopo tiles belonging to each tile.
     """
     # get the bluetopo tiles
-    bluetopo_tesselation_pattern = os.path.join(bluetopo_path,'Bluetopo', 'BlueTopo-Tile-Scheme','BlueTopo_Tile_Scheme*.gpkg')
+    bluetopo_tesselation_pattern = os.path.join(bluetopo_path,'BlueTopo', 'BlueTopo-Tile-Scheme','BlueTopo_Tile_Scheme*.gpkg')
     bluetopo_tesselation = glob.glob(bluetopo_tesselation_pattern)
     if len(bluetopo_tesselation) == 0:
         raise ValueError(f'No BlueTopo tesselation found matching {bluetopo_tesselation_pattern}')
