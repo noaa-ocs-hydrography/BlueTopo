@@ -15,11 +15,13 @@ Requirements
 This codebase is written for Python 3 and relies on the following python
 packages:
 
--   gdal
+-   gdal / ogr
+-   numpy
 -   boto3
 
 Installation
 ------------
+Download the repo and use.  No streamlined (PIP) installation is available (yet).
 
 Release Notes
 -------------
@@ -28,6 +30,12 @@ To download the desired files, first create a geometry file (such as a geopackag
   > from nbs.bluetopo import fetch_tiles
   
   > fetch_tiles.main('area_of_interest.gpkg', r'C:\download_path')
+  
+To build a GDAL VRT of the downloaded tiles:
+
+  > from nbs.bluetopo import build_vrt
+  
+  > build_vrt.main(r'C:\download_path')
 
 Authors
 -------
