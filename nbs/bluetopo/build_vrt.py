@@ -8,7 +8,7 @@ gdal.SetConfigOption("COMPRESS_OVERVIEW", "DEFLATE")
 
 # update final build step to work by branch / utm zone through a query of the vrt_tiles geometry
 
-expected_fields: dict[str | Any, list[Type[int] | Any] | list[Type[float] | Any] | Any] = \
+expected_fields = \
     dict(value=[int, gdal.GFU_MinMax],
          count=[int, gdal.GFU_PixelCount],
          data_assessment=[int, gdal.GFU_Generic],
