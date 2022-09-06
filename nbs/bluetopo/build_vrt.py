@@ -262,6 +262,8 @@ def group_available_tiles(available_tiles: dict, bluetopo_path: str, vrt_tile_pa
     available_tiles_lyr = bluetopo_ds.ExecuteSQL(sql)
     # build intersection
     target = ogr.Open(vrt_tile_path)
+    if target is None:
+        raise ValueError(f'No tesselation scheme found at {vrt_tile_path}')
     grouped_filename = os.path.join(bluetopo_path, 'intersection_file.gpkg')
     driver = ogr.GetDriverByName('GPKG')
     intersection = driver.CreateDataSource(grouped_filename)
