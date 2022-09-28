@@ -49,7 +49,7 @@ def get_available_tiles(bluetopo_path: str) -> dict:
     return available_tiles
 
 
-def modify_contributors(available_tiles: dict, bluetopo_path: str) -> None:
+def modify_contributors(available_tiles: dict, bluetopo_path: str, grouped_tiles: dict) -> None:
     """
     Parameters
     ----------
@@ -57,13 +57,25 @@ def modify_contributors(available_tiles: dict, bluetopo_path: str) -> None:
         a list of the available tiles
     bluetopo_path
         path to the bluetopo data as downloaded from AWS
+    grouped_tiles
+        tiles in regions
     Returns
     -------
         None
     """
     registry = connect_to_survey_registry(bluetopo_path)
     try:
-        for tile in available_tiles:
+        for tile, file_location in available_tiles.items():
+            tile_region = None
+            for region, r_cells in grouped_tiles.items():
+                for r_cell, r_tiles in r_cells.items():
+                    for r_tile, v in r_tiles.items():
+                        if isinstance(v, list):
+                            for file in v:
+                                if file_location.upper() in file.upper():
+                                    tile_region = region
+            if tile_region is None:
+                raise ValueError(f"No region found for {tile}")
             nbs_tile_ds = gdal.Open(available_tiles[tile],1)
             geotransform = nbs_tile_ds.GetGeoTransform()
             xres = geotransform[1]
@@ -90,6 +102,7 @@ def modify_contributors(available_tiles: dict, bluetopo_path: str) -> None:
                 new_survey_info = get_survey_idx(row_vals[survey_id_col], registry)
                 if new_survey_info is None:
                     new_survey_info = add_survey_idx(tuple(row_vals), registry)
+                add_region_idx(new_survey_info[survey_idx_col], tile_region, registry)
                 if old_survey_idx != new_survey_info[survey_idx_col]:
                     update_rat = True
                 rat_vals.append(new_survey_info)
@@ -140,6 +153,7 @@ def connect_to_survey_registry(bluetopo_path: str) -> sqlite3.Connection:
         print(e)
     if conn is not None:
         try:
+            cursor = conn.cursor()
             sql_create_survey_registry_table = """ CREATE TABLE IF NOT EXISTS survey_registry (
                                                         value integer PRIMARY KEY,
                                                         count float,
@@ -161,8 +175,14 @@ def connect_to_survey_registry(bluetopo_path: str) -> sqlite3.Connection:
                                                         survey_date_end text
                                                         
                                                 ); """
-            curser = conn.cursor()
-            curser.execute(sql_create_survey_registry_table)
+            cursor.execute(sql_create_survey_registry_table)
+            sql_create_regions_table = """CREATE TABLE IF NOT EXISTS regions (
+                                            value integer,
+                                            region text,
+                                            FOREIGN KEY (value) REFERENCES survey_registry(value)
+                                            UNIQUE(value, region));
+                                        """
+            cursor.execute(sql_create_regions_table)
         except sqlite3.Error as e:
             print(e)
     return conn
@@ -227,6 +247,27 @@ def add_survey_idx(survey_info: tuple, registry_connection: sqlite3.Connection) 
     survey_info = get_survey_idx(survey_id, registry_connection)
     return survey_info
 
+def add_region_idx(survey_value: int, region: str, registry_connection: sqlite3.Connection) -> tuple:
+    """
+    Add the given survey information to the sqlite database.
+
+    Parameters
+    ----------
+    survey_value
+        contributor value of survey
+    region
+        relevant region i.e 'PBC19'
+    registry_connection
+        A database connection object
+
+    Returns
+    -------
+        A tuple of survey info from the database once included and containing the new RAT index value
+    """
+    cursor = registry_connection.cursor()
+    sql = f'INSERT INTO regions(value, region) VALUES(?, ?) ON CONFLICT (value, region) DO NOTHING'
+    cursor.execute(sql, (survey_value, region))
+    registry_connection.commit()
 
 def group_available_tiles(available_tiles: dict, bluetopo_path: str, vrt_tile_path: str) -> dict:
     """
@@ -375,12 +416,14 @@ def build_vrt(file_list: list, vrt_path: str, levels: list) -> None:
     vrt = None
 
 
-def add_vrt_rat(bluetopo_path: str, vrt_path: str) -> None:
+def add_vrt_rat(bluetopo_path: str, region: str, vrt_path: str) -> None:
     """
     Parameters
     ----------
     bluetopo_path
         path to the bluetopo dataset as downloaded with the structure on AWS.
+    region
+        relevant region i.e 'PBC19'
     vrt_path
         path to the vrt to which to add the raster attribute table
 
@@ -404,7 +447,7 @@ def add_vrt_rat(bluetopo_path: str, vrt_path: str) -> None:
     # add the registry to the rat
     registry = connect_to_survey_registry(bluetopo_path)
     cursor = registry.cursor()
-    cursor.execute("SELECT * FROM survey_registry")
+    cursor.execute("SELECT a.* FROM regions AS b INNER JOIN survey_registry as a ON (b.value=a.value) WHERE b.region = ?", (region,))
     surveys = cursor.fetchall()
     rat.SetRowCount(len(surveys))
     for row_idx, survey in enumerate(surveys):
@@ -443,14 +486,14 @@ def main(bluetopo_path:str) -> None:
     print(f'Beginning work on {bluetopo_path}')
     start = datetime.datetime.now()
     available_tiles = get_available_tiles(bluetopo_path)
-    modify_contributors(available_tiles, bluetopo_path)
     regionally_mapped_tiles = group_available_tiles(available_tiles, bluetopo_path, vrt_tile_path)
+    modify_contributors(available_tiles, bluetopo_path, regionally_mapped_tiles)
     for region in regionally_mapped_tiles:
         mapped_tiles = regionally_mapped_tiles[region]
         print(f'Found {len(mapped_tiles)} subtiles in {region} to create from {len(available_tiles)} BlueTopo tiles.')
         vrt_list = build_sub_vrts(mapped_tiles, bluetopo_path)
         vrt_name = f'_{region}.'.join([bluetopo_path,'vrt'])
         build_vrt(vrt_list, vrt_name, [32,64])
-        add_vrt_rat(bluetopo_path, vrt_name)
+        add_vrt_rat(bluetopo_path, region, vrt_name)
     total_time = datetime.datetime.now() - start
     print(f'Elapsed time: {total_time}')
