@@ -265,7 +265,7 @@ def add_region_idx(survey_value: int, region: str, registry_connection: sqlite3.
         None
     """
     cursor = registry_connection.cursor()
-    sql = f'INSERT INTO regions(value, region) VALUES(?, ?) ON CONFLICT (value, region) DO NOTHING'
+    sql = 'INSERT INTO regions(value, region) VALUES(?, ?) ON CONFLICT (value, region) DO NOTHING'
     cursor.execute(sql, (survey_value, region))
     registry_connection.commit()
 
