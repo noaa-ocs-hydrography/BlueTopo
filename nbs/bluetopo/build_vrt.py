@@ -247,9 +247,9 @@ def add_survey_idx(survey_info: tuple, registry_connection: sqlite3.Connection) 
     survey_info = get_survey_idx(survey_id, registry_connection)
     return survey_info
 
-def add_region_idx(survey_value: int, region: str, registry_connection: sqlite3.Connection) -> tuple:
+def add_region_idx(survey_value: int, region: str, registry_connection: sqlite3.Connection) -> None:
     """
-    Add the given survey information to the sqlite database.
+    Add the survey value and applicable region to the sqlite database.
 
     Parameters
     ----------
@@ -262,7 +262,7 @@ def add_region_idx(survey_value: int, region: str, registry_connection: sqlite3.
 
     Returns
     -------
-        A tuple of survey info from the database once included and containing the new RAT index value
+        None
     """
     cursor = registry_connection.cursor()
     sql = f'INSERT INTO regions(value, region) VALUES(?, ?) ON CONFLICT (value, region) DO NOTHING'
