@@ -1,8 +1,11 @@
-import os, glob, sqlite3, datetime
+import os, sqlite3, datetime
+import shutil
+import sys
 from typing import Dict, Any, List, Type
-
+import collections
 import numpy as np
-from osgeo import gdal, ogr
+from osgeo import gdal
+
 gdal.UseExceptions()
 gdal.SetConfigOption("COMPRESS_OVERVIEW", "DEFLATE")
 
@@ -28,112 +31,6 @@ expected_fields = \
          survey_date_start=[str, gdal.GFU_Generic],
          survey_date_end=[str, gdal.GFU_Generic])
 
-def get_available_tiles(bluetopo_path: str) -> dict:
-    """
-    Parameters
-    ----------
-    bluetopo_path
-        path to bluetopo data.
-    Returns
-    -------
-    dict of tile names (keys) to tile paths (str value).
-    """
-    search_path = os.path.join(bluetopo_path, 'BlueTopo/*/*.tiff')
-    available_files = glob.glob(search_path)
-    available_tiles = {}
-    if len(available_files) > 0:
-        for file_path in available_files:
-            root = os.path.dirname(file_path)
-            tile_name = os.path.split(root)[-1]
-            available_tiles[tile_name] = file_path
-    return available_tiles
-
-
-def modify_contributors(available_tiles: dict, bluetopo_path: str, grouped_tiles: dict) -> None:
-    """
-    Parameters
-    ----------
-    available_tiles
-        a list of the available tiles
-    bluetopo_path
-        path to the bluetopo data as downloaded from AWS
-    grouped_tiles
-        tiles in regions
-    Returns
-    -------
-        None
-    """
-    registry = connect_to_survey_registry(bluetopo_path)
-    try:
-        for tile, file_location in available_tiles.items():
-            tile_region = None
-            for region, r_cells in grouped_tiles.items():
-                for r_cell, r_tiles in r_cells.items():
-                    for r_tile, v in r_tiles.items():
-                        if isinstance(v, list):
-                            for file in v:
-                                if file_location.upper() in file.upper():
-                                    tile_region = region
-            if tile_region is None:
-                raise ValueError(f"No region found for {tile}")
-            nbs_tile_ds = gdal.Open(available_tiles[tile],1)
-            geotransform = nbs_tile_ds.GetGeoTransform()
-            xres = geotransform[1]
-            contributor_band = nbs_tile_ds.GetRasterBand(3)
-            no_data = int(contributor_band.GetNoDataValue())
-            rat = contributor_band.GetDefaultRAT()
-            # check the table to see if it is as expected
-            for idx, field_name in enumerate(expected_fields):
-                rat_field = rat.GetNameOfCol(idx).lower()
-                if rat_field == 'value':
-                    survey_idx_col = idx
-                if rat_field == 'source_survey_id':
-                    survey_id_col = idx
-                if rat_field != field_name:
-                    raise ValueError(f'RAT columns do not match expected columns: {rat_field} vs {field_name}')
-            # extract the rat values
-            update_rat = False
-            rat_vals = []
-            for row in range(rat.GetRowCount()):
-                row_vals = []
-                for col in range(rat.GetColumnCount()):
-                    row_vals.append(rat.GetValueAsString(row, col))
-                old_survey_idx = int(row_vals[survey_idx_col])
-                new_survey_info = get_survey_idx(row_vals[survey_id_col], registry)
-                if new_survey_info is None:
-                    new_survey_info = add_survey_idx(tuple(row_vals), registry)
-                add_region_idx(new_survey_info[survey_idx_col], tile_region, registry)
-                if old_survey_idx != new_survey_info[survey_idx_col]:
-                    update_rat = True
-                rat_vals.append(new_survey_info)
-            if not update_rat:
-                # hey, it looks like this file doesn't need to be updated...
-                continue
-            else:
-                # okay, fine.  Update the contributor layer
-                print(f'Updating {tile} RAT')
-                old_contrib_band_array = contributor_band.ReadAsArray()
-                # confirm all values in the array are in the table?
-                new_contrib_band_array = np.full_like(old_contrib_band_array, no_data)
-                new_rat = rat.Clone()
-                for idx, row in enumerate(rat_vals):
-                    old_survey_idx = rat.GetValueAsInt(idx, survey_idx_col)
-                    contrib_idx = np.where(old_contrib_band_array == old_survey_idx)
-                    new_contrib_band_array[contrib_idx] = row[survey_idx_col]
-                    new_rat.SetValueAsInt(idx, survey_idx_col, row[survey_idx_col])
-                contributor_band.WriteArray(new_contrib_band_array)
-                contributor_band.SetDefaultRAT(new_rat)
-            if xres == 4.0:
-                nbs_tile_ds.BuildOverviews('Nearest', [2,4])
-            elif xres == 8.0:
-                nbs_tile_ds.BuildOverviews('Nearest', [2])
-    except Exception as e:
-        raise e
-    finally:
-        registry.close()
-
-
-
 def connect_to_survey_registry(bluetopo_path: str) -> sqlite3.Connection:
     """
     Parameters
@@ -145,7 +42,7 @@ def connect_to_survey_registry(bluetopo_path: str) -> sqlite3.Connection:
     -------
         database connection for registering tiles found in the available BlueTopo datasets.
     """
-    database_path = os.path.join(bluetopo_path, 'survey_registry.db')
+    database_path = os.path.join(bluetopo_path, 'bluetopo_registry.db')
     conn = None
     try:
         conn = sqlite3.connect(database_path)
@@ -154,199 +51,52 @@ def connect_to_survey_registry(bluetopo_path: str) -> sqlite3.Connection:
     if conn is not None:
         try:
             cursor = conn.cursor()
-            sql_create_survey_registry_table = """ CREATE TABLE IF NOT EXISTS survey_registry (
-                                                        value integer PRIMARY KEY,
-                                                        count float,
-                                                        data_assessment integer,
-                                                        feature_least_depth integer,
-                                                        significant_features integer,
-                                                        feature_size float,
-                                                        coverage integer,
-                                                        bathy_coverage integer,
-                                                        horizontal_uncert_fixed float,
-                                                        horizontal_uncert_var float,
-                                                        vertical_uncert_fixed float,
-                                                        vertical_uncert_var float,
-                                                        license_name text,
-                                                        license_url text,
-                                                        source_survey_id text NOT NULL,
-                                                        source_institution text,
-                                                        survey_date_start text,
-                                                        survey_date_end text
-                                                        
-                                                ); """
-            cursor.execute(sql_create_survey_registry_table)
-            sql_create_regions_table = """CREATE TABLE IF NOT EXISTS regions (
-                                            value integer,
-                                            region text,
-                                            FOREIGN KEY (value) REFERENCES survey_registry(value)
-                                            UNIQUE(value, region));
-                                        """
-            cursor.execute(sql_create_regions_table)
+            cursor.executescript("""CREATE TABLE IF NOT EXISTS tileset (
+                                        tilescheme text PRIMARY KEY,
+                                        location text,
+                                        downloaded text);
+                                    CREATE TABLE IF NOT EXISTS vrt_subregion (
+                                        region text PRIMARY KEY,
+                                        utm text,
+                                        res_2_vrt text,
+                                        res_2_ovr text,
+                                        res_4_vrt text,
+                                        res_4_ovr text,
+                                        res_8_vrt text,
+                                        res_8_ovr text,
+                                        complete_vrt text,
+                                        complete_ovr text,
+                                        built integer);
+                                    CREATE TABLE IF NOT EXISTS vrt_utm (
+                                        utm text PRIMARY KEY,
+                                        utm_vrt text,
+                                        utm_ovr text,
+                                        built integer);
+                                    CREATE TABLE IF NOT EXISTS tiles (
+                                        tilename text PRIMARY KEY,
+                                        geotiff_link text,
+                                        rat_link text,
+                                        delivered_date text,
+                                        resolution text,
+                                        utm text,
+                                        subregion text,
+                                        geotiff_disk text,
+                                        rat_disk text);""")
+            conn.commit()
         except sqlite3.Error as e:
             print(e)
     return conn
 
-
-def get_survey_idx(survey_id: str, registry_connection: sqlite3.Connection) -> tuple:
-    """
-    Get the survey information from the sqlite database.
-
-    Parameters
-    ----------
-    survey_id
-        survey name as a string as pulled from the raster attribute table field source_survey_id.
-    registry_connection
-        pysqlite database connection object.
-    Returns
-    -------
-        a tuple with the information belonging to the survey_id from the database.  Returns None if the survey_id is
-        not found.
-    """
+def get_tile_scheme(registry_connection: sqlite3.Connection) -> str:
     cursor = registry_connection.cursor()
-    cursor.execute("SELECT * FROM survey_registry WHERE source_survey_id=?", (survey_id,))
-    surveys = cursor.fetchall()
-    num_surveys = len(surveys)
-    if num_surveys > 1:
-        raise ValueError(f'Duplicate Survey IDs found in registry: {surveys}')
-    elif num_surveys == 1:
-        survey_info = surveys[0]
-    else:
-        survey_info = None
-    return survey_info
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM tileset ORDER BY downloaded desc LIMIT 1")
+    tilescheme = cursor.fetchone()
+    if tilescheme is None:
+        raise ValueError('No tilescheme retrieved. Please run fetch_tiles.')
+    return tilescheme['location']
 
-
-def add_survey_idx(survey_info: tuple, registry_connection: sqlite3.Connection) -> tuple:
-    """
-    Add the given survey information to the sqlite database.
-
-    Parameters
-    ----------
-    survey_info
-        A tuple of the
-    registry_connection
-        A database connection object
-
-    Returns
-    -------
-        A tuple of survey info from the database once included and containing the new RAT index value
-    """
-    expected_field_names = expected_fields.keys()
-    idx = list(expected_field_names).index('source_survey_id')
-    survey_id = survey_info[idx]
-    if get_survey_idx(survey_id, registry_connection) is None:
-        cursor = registry_connection.cursor()
-        cursor.execute('''INSERT INTO survey_registry(count, data_assessment, feature_least_depth,
-                                                        significant_features, feature_size, coverage, bathy_coverage,
-                                                        horizontal_uncert_fixed, horizontal_uncert_var, 
-                                                        vertical_uncert_fixed, vertical_uncert_var, license_name, 
-                                                        license_url, source_survey_id, source_institution, 
-                                                        survey_date_start, survey_date_end) 
-                                                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', survey_info[1:])
-        registry_connection.commit()
-    survey_info = get_survey_idx(survey_id, registry_connection)
-    return survey_info
-
-def add_region_idx(survey_value: int, region: str, registry_connection: sqlite3.Connection) -> None:
-    """
-    Add the survey value and applicable region to the sqlite database.
-
-    Parameters
-    ----------
-    survey_value
-        contributor value of survey
-    region
-        relevant region i.e 'PBC19'
-    registry_connection
-        A database connection object
-
-    Returns
-    -------
-        None
-    """
-    cursor = registry_connection.cursor()
-    sql = 'INSERT INTO regions(value, region) VALUES(?, ?) ON CONFLICT (value, region) DO NOTHING'
-    cursor.execute(sql, (survey_value, region))
-    registry_connection.commit()
-
-def group_available_tiles(available_tiles: dict, bluetopo_path: str, vrt_tile_path: str) -> dict:
-    """
-    Group the available bluetopo tiles by intersecting the bluetopo geometries with the vrt tile path geometries.
-
-    Parameters
-    ----------
-    available_tiles
-        A dictionary of the available tiles by name and the associated path to the tile raster file
-    bluetopo_path
-        path to the bluetopo tiles as downloaded from AWS
-    vrt_tile_path
-        path to the tesselation scheme to use for grouping tiles
-
-    Returns
-    -------
-        A dictionary of vrt subregion names pointing to a list of bluetopo tiles belonging to each tile.
-    """
-    # get the bluetopo tiles
-    bluetopo_tesselation_pattern = os.path.join(bluetopo_path,'BlueTopo', 'BlueTopo-Tile-Scheme','BlueTopo_Tile_Scheme*.gpkg')
-    bluetopo_tesselation = glob.glob(bluetopo_tesselation_pattern)
-    if len(bluetopo_tesselation) == 0:
-        raise ValueError(f'No BlueTopo tesselation found matching {bluetopo_tesselation_pattern}')
-    elif len(bluetopo_tesselation) > 1:
-        raise ValueError(f'More than one BlueTopo tesselation found matching {bluetopo_tesselation_pattern}')
-    else:
-        bluetopo_tesselation = bluetopo_tesselation[0]
-    bluetopo_ds = ogr.Open(bluetopo_tesselation)
-    bluetopo_lyr = bluetopo_ds.GetLayer(0)
-    lyr_name = bluetopo_lyr.GetName()
-    # get geometries for the available tiles
-    sql = f'SELECT * FROM {lyr_name} WHERE tile IN {tuple(available_tiles.keys())}'
-    available_tiles_lyr = bluetopo_ds.ExecuteSQL(sql)
-    # build intersection
-    target = ogr.Open(vrt_tile_path)
-    if target is None:
-        raise ValueError(f'No tesselation scheme found at {vrt_tile_path}')
-    grouped_filename = os.path.join(bluetopo_path, 'intersection_file.gpkg')
-    driver = ogr.GetDriverByName('GPKG')
-    intersection = driver.CreateDataSource(grouped_filename)
-    intersect_lyr = intersection.CreateLayer('intersect_lyr', geom_type=ogr.wkbPolygon)
-    target_layer = target.GetLayer(0)
-    target_layer.Intersection(available_tiles_lyr, intersect_lyr)
-    # build the tile map
-    lyr_def = intersect_lyr.GetLayerDefn()
-    for field_num in range(lyr_def.GetFieldCount()):
-        field = lyr_def.GetFieldDefn(field_num)
-        if field.name == 'tile':
-            tileid = field_num
-        elif field.name == 'CellName':
-            cellid = field_num
-    tile_map = {}
-    feature = intersect_lyr.GetNextFeature()
-    while feature:
-        cell = feature.GetField(cellid)
-        tile = feature.GetField(tileid)
-        band = tile[2]
-        if cell not in tile_map:
-            tile_map[cell] = {}
-            geometry = feature.GetGeometryRef()
-            centroid = geometry.Centroid()
-            utm_zone = int(1 + (180 + centroid.GetX()) / 6)
-            tile_map[cell]['region'] = feature['Branch'] + str(utm_zone).zfill(2)
-        if band not in tile_map[cell]:
-            tile_map[cell][band] = []
-        tile_map[cell][band].append(available_tiles[tile])
-        feature = intersect_lyr.GetNextFeature()
-    region_map = {}
-    for cell_name in tile_map:
-        region = tile_map[cell_name]['region']
-        if region not in region_map:
-            region_map[region] = {}
-        region_map[region][cell_name] = tile_map[cell_name]
-    intersection = None
-    os.remove(grouped_filename)
-    return region_map
-
-
-def build_sub_vrts(mapped_tiles: dict, bluetopo_path: str) -> list:
+def build_sub_vrts(subregion: str, mapped_tiles: list, bluetopo_path: str) -> list:
     """
     Parameters
     ----------
@@ -359,34 +109,61 @@ def build_sub_vrts(mapped_tiles: dict, bluetopo_path: str) -> list:
     -------
         list of paths to subregion vrt files
     """
-    storage_dir = os.path.join(bluetopo_path,'vrt_tiles')
-    if not os.path.exists(storage_dir):
-        os.makedirs(storage_dir)
+    field_set = {
+    'region': subregion['region'],
+    'res_2_vrt': None,
+    'res_2_ovr': None,
+    'res_4_vrt': None,
+    'res_4_ovr': None,
+    'res_8_vrt': None,
+    'res_8_ovr': None,
+    'complete_vrt': None,
+    'complete_ovr': None}
+    end_location = os.path.join('vrt_tiles', subregion['region'])
+    region_storage = os.path.join(bluetopo_path, end_location)
+    try:
+        if os.path.isdir(region_storage):
+            shutil.rmtree(region_storage)
+    except (OSError, PermissionError) as e:
+        print(f'failed to remove older vrt files for {subregion["region"]} \nplease close all files and attempt again')
+        sys.exit(1)
+    if not os.path.exists(region_storage):
+        os.makedirs(region_storage)
+    resolution_tiles = collections.defaultdict(list)
+    for mapped_tile in mapped_tiles:
+        resolution_tiles[mapped_tile['resolution']].append(mapped_tile)
     vrt_list = []
-    total_regions = len(mapped_tiles)
-    for num, region in enumerate(mapped_tiles):
-        print(f'Building subregion {region} ({num + 1}/{total_regions}).')
-        region_storage = os.path.join(storage_dir,region)
-        if not os.path.exists(region_storage):
-            os.makedirs(region_storage)
-        region_files = []
-        if '5' in mapped_tiles[region]:
-            band5_vrt = os.path.join(region_storage, 'band5.vrt')
-            build_vrt(mapped_tiles[region]['5'], band5_vrt, [4,8])
-            region_files.append(band5_vrt)
-        if '4' in mapped_tiles[region]:
-            band4_vrt = os.path.join(region_storage, 'band4.vrt')
-            build_vrt(mapped_tiles[region]['4'], band4_vrt, [8])
-            region_files.append(band4_vrt)
-        if '3' in mapped_tiles[region]:
-            region_files.append(mapped_tiles[region]['3'][0])
-        if len(region_files) == 1:
-            region_rep = region_files[0]
-        else:
-            region_rep = os.path.join(storage_dir, region + '.vrt')
-            build_vrt(region_files, region_rep, [16])
-        vrt_list.append(region_rep)
-    return vrt_list
+    for resolution, r_tiles in resolution_tiles.items():
+        print(f'Building {subregion["region"]} band {resolution}.')
+        b_tile_locations = [os.path.join(bluetopo_path, btile['geotiff_disk']) for btile in r_tiles]
+        vrt_path = os.path.join(region_storage, subregion["region"] + f'_{resolution}.vrt')
+        if '2' in resolution:
+            build_vrt(b_tile_locations, vrt_path, [2,4])
+            vrt_list.append(vrt_path)
+            field_set['res_2_vrt'] = os.path.join(end_location, subregion["region"] + f'_{resolution}.vrt')
+            if os.path.isfile(os.path.join(bluetopo_path, field_set['res_2_vrt'] + '.ovr')):
+                field_set['res_2_ovr'] = os.path.join(end_location, subregion["region"] + f'_{resolution}.vrt.ovr')
+        if '4' in resolution:
+            build_vrt(b_tile_locations, vrt_path, [4,8])
+            vrt_list.append(vrt_path)
+            field_set['res_4_vrt'] = os.path.join(end_location, subregion["region"] + f'_{resolution}.vrt')
+            if os.path.isfile(os.path.join(bluetopo_path, field_set['res_4_vrt'] + '.ovr')):
+                field_set['res_4_ovr'] = os.path.join(end_location, subregion["region"] + f'_{resolution}.vrt.ovr')
+        if '8' in resolution:
+            build_vrt(b_tile_locations, vrt_path, [8])
+            vrt_list.append(vrt_path)
+            field_set['res_8_vrt'] = os.path.join(end_location, subregion["region"] + f'_{resolution}.vrt')
+            if os.path.isfile(os.path.join(bluetopo_path, field_set['res_8_vrt'] + '.ovr')):
+                field_set['res_8_ovr'] = os.path.join(end_location, subregion["region"] + f'_{resolution}.vrt.ovr')
+        if '16' in resolution:
+            vrt_list.extend(b_tile_locations)
+    complete_vrt_path = os.path.join(end_location, subregion["region"] + '_complete.vrt')
+    region_rep = os.path.join(bluetopo_path, complete_vrt_path)
+    build_vrt(vrt_list, region_rep, [16])
+    field_set['complete_vrt'] = complete_vrt_path
+    if os.path.isfile(os.path.join(bluetopo_path, complete_vrt_path + '.ovr')):
+        field_set['complete_ovr'] = complete_vrt_path + '.ovr'
+    return field_set
 
 def build_vrt(file_list: list, vrt_path: str, levels: list) -> None:
     """
@@ -402,7 +179,15 @@ def build_vrt(file_list: list, vrt_path: str, levels: list) -> None:
     -------
         None
     """
-    vrt_options = gdal.BuildVRTOptions(srcNodata=1000000, VRTNodata=1000000, resolution="highest")
+    try:
+        if os.path.isfile(vrt_path):
+            os.remove(vrt_path)
+        if os.path.isfile(vrt_path + '.ovr'):
+            os.remove(vrt_path + '.ovr')
+    except (OSError, PermissionError) as e:
+        print(f"failed to remove older vrt files for {vrt_path} \nplease close all files and attempt again")
+        sys.exit(1)
+    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, VRTNodata=np.nan, resolution="highest")
     vrt = gdal.BuildVRT(vrt_path, file_list, options=vrt_options)
     band1 = vrt.GetRasterBand(1)
     band1.SetDescription('Elevation')
@@ -412,11 +197,10 @@ def build_vrt(file_list: list, vrt_path: str, levels: list) -> None:
     band3.SetDescription('Contributor')
     vrt = None
     vrt = gdal.Open(vrt_path, 0)
-    vrt.BuildOverviews("nearest", levels)
+    vrt.BuildOverviews("average", levels)
     vrt = None
 
-
-def add_vrt_rat(bluetopo_path: str, region: str, vrt_path: str) -> None:
+def add_vrt_rat(registry_connection: sqlite3.Connection, utm: str, bt_path: str, vrt_path: str) -> None:
     """
     Parameters
     ----------
@@ -431,7 +215,32 @@ def add_vrt_rat(bluetopo_path: str, region: str, vrt_path: str) -> None:
     -------
         None
     """
-    # build a gdal rat table by adding columns of the right type
+    cursor = registry_connection.cursor()
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM tiles WHERE utm = ?", (utm,))
+    tiles = [dict(row) for row in cursor.fetchall()]
+    surveys = []
+    existing = set()
+    for tile in tiles:
+        gtiff = os.path.join(bt_path, tile['geotiff_disk'])
+        if os.path.isfile(gtiff) is False:
+            continue
+        rat_file = os.path.join(bt_path, tile['rat_disk'])
+        if os.path.isfile(rat_file) is False:
+            continue
+        ds = gdal.Open(gtiff)
+        contrib = ds.GetRasterBand(3)
+        rat_n = contrib.GetDefaultRAT()
+        if rat_n.GetNameOfCol(14).lower() != 'source_survey_id':
+            raise ValueError('Unexpected field order')
+        for row in range(rat_n.GetRowCount()):
+            if rat_n.GetValueAsString(row, 14) in existing:
+                continue
+            curr = tuple()
+            for col in range(rat_n.GetColumnCount()):
+                curr = curr + ((rat_n.GetValueAsString(row, col)),)
+            existing.add(rat_n.GetValueAsString(row, 14))
+            surveys.append(curr)
     rat = gdal.RasterAttributeTable()
     for entry in expected_fields:
         field_type, usage = expected_fields[entry]
@@ -444,11 +253,6 @@ def add_vrt_rat(bluetopo_path: str, region: str, vrt_path: str) -> None:
         else:
             raise TypeError('Unknown data type submitted for gdal raster attribute table.')
         rat.CreateColumn(entry, col_type, usage)
-    # add the registry to the rat
-    registry = connect_to_survey_registry(bluetopo_path)
-    cursor = registry.cursor()
-    cursor.execute("SELECT a.* FROM regions AS b INNER JOIN survey_registry as a ON (b.value=a.value) WHERE b.region = ?", (region,))
-    surveys = cursor.fetchall()
     rat.SetRowCount(len(surveys))
     for row_idx, survey in enumerate(surveys):
         for col_idx, entry in enumerate(expected_fields):
@@ -459,12 +263,111 @@ def add_vrt_rat(bluetopo_path: str, region: str, vrt_path: str) -> None:
                 rat.SetValueAsInt(row_idx, col_idx, int(survey[col_idx]))
             elif field_type == float:
                 rat.SetValueAsDouble(row_idx, col_idx, float(survey[col_idx]))
-    # assign the table to the vrt
     vrt_ds = gdal.Open(vrt_path, 1)
     contributor_band = vrt_ds.GetRasterBand(3)
     contributor_band.SetDefaultRAT(rat)
-    vrt_ds = None
 
+def select_tiles_by_subregion(bluetopo_path: str, registry_connection: sqlite3.Connection, subregion: str) -> list:
+    cursor = registry_connection.cursor()
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM tiles WHERE subregion = ?", (subregion,))
+    sr_tiles = [dict(row) for row in cursor.fetchall()]
+    sr_tiles_with_files = [sr_tile for sr_tile in sr_tiles if sr_tile['geotiff_disk'] and sr_tile['rat_disk']
+                           and os.path.isfile(os.path.join(bluetopo_path, sr_tile['geotiff_disk']))
+                           and os.path.isfile(os.path.join(bluetopo_path, sr_tile['rat_disk']))]
+    if len(sr_tiles) - len(sr_tiles_with_files) != 0:
+        print(f'did not find the files for {len(sr_tiles) - len(sr_tiles_with_files)} registered tile(s) in subregion {subregion}.\n'
+              f'you may run fetch_tiles to retrieve files or correct the directory path if incorrect.')
+    return sr_tiles_with_files
+
+def select_subregions_by_utm(bluetopo_path: str, registry_connection: sqlite3.Connection, utm: str) -> list:
+    cursor = registry_connection.cursor()
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM vrt_subregion WHERE utm = ? and built = 1", (utm,))
+    utm_subregions = [dict(row) for row in cursor.fetchall()]
+    for utm_subregion in utm_subregions:
+        if ((utm_subregion['res_2_vrt'] and os.path.isfile(os.path.join(bluetopo_path, utm_subregion['res_2_vrt'])) == False) or
+        (utm_subregion['res_2_ovr'] and os.path.isfile(os.path.join(bluetopo_path, utm_subregion['res_2_ovr'])) == False) or
+        (utm_subregion['res_4_vrt'] and os.path.isfile(os.path.join(bluetopo_path, utm_subregion['res_4_vrt'])) == False) or
+        (utm_subregion['res_4_ovr'] and os.path.isfile(os.path.join(bluetopo_path, utm_subregion['res_4_ovr'])) == False) or
+        (utm_subregion['res_8_vrt'] and os.path.isfile(os.path.join(bluetopo_path, utm_subregion['res_8_vrt'])) == False) or
+        (utm_subregion['res_8_ovr'] and os.path.isfile(os.path.join(bluetopo_path, utm_subregion['res_8_ovr'])) == False) or
+        (utm_subregion['complete_vrt'] is None or os.path.isfile(os.path.join(bluetopo_path, utm_subregion['complete_vrt'])) == False) or
+        (utm_subregion['complete_ovr'] is None or os.path.isfile(os.path.join(bluetopo_path, utm_subregion['complete_ovr'])) == False)):
+            raise ValueError(f'subregion vrt files missing for {utm_subregion["utm"]}. please rerun.')
+    return utm_subregions
+
+def select_unbuilt_subregions(registry_connection: sqlite3.Connection) -> list:
+    cursor = registry_connection.cursor()
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM vrt_subregion WHERE built = 0")
+    unbuilt_subregions = [dict(row) for row in cursor.fetchall()]
+    return unbuilt_subregions
+
+def select_unbuilt_utms(registry_connection: sqlite3.Connection) -> list:
+    cursor = registry_connection.cursor()
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM vrt_utm WHERE built = 0")
+    unbuilt_utms = [dict(row) for row in cursor.fetchall()]
+    return unbuilt_utms
+
+def update_subregion(registry_connection: sqlite3.Connection, field_set: dict) -> None:
+    cursor = registry_connection.cursor()
+    cursor.execute('''UPDATE vrt_subregion SET res_2_vrt = ?, res_2_ovr = ?, res_4_vrt = ?, res_4_ovr = ?,
+                   res_8_vrt = ?, res_8_ovr = ?, complete_vrt = ?, complete_ovr = ?,
+                   built = 1 where region = ?''',
+                   (field_set['res_2_vrt'], field_set['res_2_ovr'], field_set['res_4_vrt'], field_set['res_4_ovr'], 
+                   field_set['res_8_vrt'], field_set['res_8_ovr'], field_set['complete_vrt'], field_set['complete_ovr'],
+                   field_set['region']))
+    registry_connection.commit()
+
+def update_utm(registry_connection: sqlite3.Connection, field_set: dict) -> None:
+    cursor = registry_connection.cursor()
+    cursor.execute('UPDATE vrt_utm SET utm_vrt = ?, utm_ovr = ?, built = 1 where utm = ?',
+                   (field_set['utm_vrt'], field_set['utm_ovr'], field_set['utm'],))
+    registry_connection.commit()
+
+def missing_subregions(bluetopo_path: str, registry_connection: sqlite3.Connection) -> int:
+    cursor = registry_connection.cursor()
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM vrt_subregion WHERE built = 1")
+    built_subregions = [dict(row) for row in cursor.fetchall()]
+    missing_subregion_count = 0
+    # todo comparison against tiles table to know resolution vrts exist where they should
+    for subregion in built_subregions:
+        if (
+        (subregion['res_2_vrt'] and os.path.isfile(os.path.join(bluetopo_path, subregion['res_2_vrt'])) == False) or
+        (subregion['res_2_ovr'] and os.path.isfile(os.path.join(bluetopo_path, subregion['res_2_ovr'])) == False) or
+        (subregion['res_4_vrt'] and os.path.isfile(os.path.join(bluetopo_path, subregion['res_4_vrt'])) == False) or
+        (subregion['res_4_ovr'] and os.path.isfile(os.path.join(bluetopo_path, subregion['res_4_ovr'])) == False) or
+        (subregion['res_8_vrt'] and os.path.isfile(os.path.join(bluetopo_path, subregion['res_8_vrt'])) == False) or
+        (subregion['res_8_ovr'] and os.path.isfile(os.path.join(bluetopo_path, subregion['res_8_ovr'])) == False) or
+        (subregion['complete_vrt'] is None or os.path.isfile(os.path.join(bluetopo_path, subregion['complete_vrt'])) == False) or
+        (subregion['complete_ovr'] is None or os.path.isfile(os.path.join(bluetopo_path, subregion['complete_ovr'])) == False)):
+            missing_subregion_count += 1
+            cursor.execute('''UPDATE vrt_subregion SET res_2_vrt = ?, res_2_ovr = ?, res_4_vrt = ?, res_4_ovr = ?,
+                           res_8_vrt = ?, res_8_ovr = ?, complete_vrt = ?, complete_ovr = ?, built = 0 where region = ?''',
+                           (None, None, None, None, None, None, None, None, subregion['region'],))
+            cursor.execute('UPDATE vrt_utm SET utm_vrt = ?, utm_ovr = ?, built = 0 where utm = ?',
+                           (None, None, subregion['utm'],))
+            registry_connection.commit()
+    return missing_subregion_count
+
+def missing_utms(bluetopo_path: str, registry_connection: sqlite3.Connection) -> int:
+    cursor = registry_connection.cursor()
+    cursor.row_factory = sqlite3.Row
+    cursor.execute("SELECT * FROM vrt_utm WHERE built = 1")
+    built_utms = [dict(row) for row in cursor.fetchall()]
+    missing_utm_count = 0
+    for utm in built_utms:
+        if (utm['utm_vrt'] is None or utm['utm_ovr'] is None
+        or os.path.isfile(os.path.join(bluetopo_path, utm['utm_vrt'])) == False
+        or os.path.isfile(os.path.join(bluetopo_path, utm['utm_ovr'])) == False):
+            missing_utm_count += 1
+            cursor.execute('UPDATE vrt_utm SET utm_vrt = ?, utm_ovr = ?, built = 0 where utm = ?',
+                           (None, None, utm['utm'],))
+            registry_connection.commit()
+    return missing_utm_count
 
 def main(bluetopo_path:str) -> None:
     """
@@ -482,18 +385,52 @@ def main(bluetopo_path:str) -> None:
     -------
     None
     """
-    vrt_tile_path = os.path.join(os.path.dirname(__file__), 'data/vrt_tiles.gpkg')
-    print(f'Beginning work on {bluetopo_path}')
     start = datetime.datetime.now()
-    available_tiles = get_available_tiles(bluetopo_path)
-    regionally_mapped_tiles = group_available_tiles(available_tiles, bluetopo_path, vrt_tile_path)
-    modify_contributors(available_tiles, bluetopo_path, regionally_mapped_tiles)
-    for region in regionally_mapped_tiles:
-        mapped_tiles = regionally_mapped_tiles[region]
-        print(f'Found {len(mapped_tiles)} subtiles in {region} to create from {len(available_tiles)} BlueTopo tiles.')
-        vrt_list = build_sub_vrts(mapped_tiles, bluetopo_path)
-        vrt_name = f'_{region}.'.join([bluetopo_path,'vrt'])
-        build_vrt(vrt_list, vrt_name, [32,64])
-        add_vrt_rat(bluetopo_path, region, vrt_name)
+    if int(gdal.VersionInfo()) < 3040000:
+        raise ValueError('Please update gdal to 3.4 to create VRTs')
+    print(f'Beginning work on {bluetopo_path}')
+    if not os.path.exists(bluetopo_path):
+        raise ValueError("Given BlueTopo Path not found")
+    if not os.path.exists(os.path.join(bluetopo_path, 'bluetopo_registry.db')):
+        raise ValueError("SQLite DB not found. Confirm correct path. Note: fetch_tiles must be at least once prior to build_vrt")
+    conn = connect_to_survey_registry(bluetopo_path)
+    tilescheme = os.path.join(bluetopo_path, get_tile_scheme(conn))
+    if not os.path.isfile(tilescheme):
+        raise ValueError('Failed to find tilescheme. Please run fetch_tiles or correct bluetopo path.')
+    # subregions missing files
+    missing_sr_count = missing_subregions(bluetopo_path, conn)
+    if missing_sr_count:
+        print(f'{missing_sr_count} subregion vrts files missing. Added to build list.')
+    # build subregion vrts
+    unbuilt_subregions = select_unbuilt_subregions(conn)
+    print(f'Building {len(unbuilt_subregions)} subregion vrt(s)')
+    for ub_sr in unbuilt_subregions:
+        sr_tiles = select_tiles_by_subregion(bluetopo_path, conn, ub_sr['region'])
+        if len(sr_tiles) < 1:
+            continue
+        field_set = build_sub_vrts(ub_sr, sr_tiles, bluetopo_path)
+        update_subregion(conn, field_set)
+    # utms missing files
+    missing_utm_count = missing_utms(bluetopo_path, conn)
+    if missing_utm_count:
+        print(f'{missing_utm_count} utm vrts files missing. Added to build list.')
+    # build utm vrts
+    unbuilt_utms = select_unbuilt_utms(conn)
+    print(f'Building {len(unbuilt_utms)} utm vrt(s)')
+    for ub_utm in unbuilt_utms:
+        utm_subregions = select_subregions_by_utm(bluetopo_path, conn, ub_utm['utm'])
+        vrt_list = [os.path.join(bluetopo_path, utm_subregion['complete_vrt']) for utm_subregion in utm_subregions]
+        if len(vrt_list) < 1:
+            continue
+        utm_storage_add = os.path.join('vrt_tiles', str(ub_utm['utm']) + '.vrt')
+        utm_storage = os.path.join(bluetopo_path, utm_storage_add)
+        build_vrt(vrt_list, utm_storage, [32,64])
+        add_vrt_rat(conn, ub_utm['utm'], bluetopo_path, utm_storage)
+        field_set = {'utm_vrt': utm_storage_add, 'utm_ovr': None, 'utm': ub_utm['utm']}
+        if os.path.isfile(os.path.join(bluetopo_path, utm_storage_add + '.ovr')):
+            field_set['utm_ovr'] = utm_storage_add + '.ovr'
+        else:
+            raise ValueError(f"overview not created for utm {str(ub_utm['utm'])}")
+        update_utm(conn, field_set)
     total_time = datetime.datetime.now() - start
     print(f'Elapsed time: {total_time}')
