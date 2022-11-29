@@ -29,7 +29,7 @@ To download the desired files, first create a geometry file (such as a geopackag
   
   > from nbs.bluetopo import fetch_tiles
   
-  > fetch_tiles.main('area_of_interest.gpkg', r'C:\download_path')
+  > fetch_tiles.main(r'C:\download_path', 'area_of_interest.gpkg')
   
 To build a GDAL VRT of the downloaded tiles:
 
