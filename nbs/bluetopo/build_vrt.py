@@ -187,7 +187,7 @@ def build_vrt(file_list: list, vrt_path: str, levels: list) -> None:
     except (OSError, PermissionError) as e:
         print(f"failed to remove older vrt files for {vrt_path} \nplease close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, VRTNodata=np.nan, resolution="highest")
+    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, VRTNodata=np.nan, resampleAlg='near', resolution="highest")
     vrt = gdal.BuildVRT(vrt_path, file_list, options=vrt_options)
     band1 = vrt.GetRasterBand(1)
     band1.SetDescription('Elevation')
@@ -197,7 +197,7 @@ def build_vrt(file_list: list, vrt_path: str, levels: list) -> None:
     band3.SetDescription('Contributor')
     vrt = None
     vrt = gdal.Open(vrt_path, 0)
-    vrt.BuildOverviews("average", levels)
+    vrt.BuildOverviews("NEAREST", levels)
     vrt = None
 
 def add_vrt_rat(registry_connection: sqlite3.Connection, utm: str, bt_path: str, vrt_path: str) -> None:
