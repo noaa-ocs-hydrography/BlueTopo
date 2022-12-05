@@ -218,9 +218,9 @@ def add_vrt_rat(registry_connection: sqlite3.Connection, utm: str, bt_path: str,
     cursor = registry_connection.cursor()
     cursor.row_factory = sqlite3.Row
     cursor.execute("SELECT * FROM tiles WHERE utm = ?", (utm,))
+    exp_fields = list(expected_fields.keys())
     tiles = [dict(row) for row in cursor.fetchall()]
     surveys = []
-    existing = set()
     for tile in tiles:
         gtiff = os.path.join(bt_path, tile['geotiff_disk'])
         if os.path.isfile(gtiff) is False:
@@ -231,15 +231,20 @@ def add_vrt_rat(registry_connection: sqlite3.Connection, utm: str, bt_path: str,
         ds = gdal.Open(gtiff)
         contrib = ds.GetRasterBand(3)
         rat_n = contrib.GetDefaultRAT()
-        if rat_n.GetNameOfCol(14).lower() != 'source_survey_id':
-            raise ValueError('Unexpected field order')
+        for col in range(rat_n.GetColumnCount()):
+            if exp_fields[col] != rat_n.GetNameOfCol(col).lower():
+                raise ValueError('Unexpected field order')
         for row in range(rat_n.GetRowCount()):
-            if rat_n.GetValueAsString(row, 14) in existing:
+            exist = False
+            for survey in surveys:
+                if survey[0] == rat_n.GetValueAsString(row, 0):
+                    survey[1] = str(int(survey[1]) + int(rat_n.GetValueAsString(row, 1)))
+                    exist = True
+            if exist:
                 continue
-            curr = tuple()
+            curr = []
             for col in range(rat_n.GetColumnCount()):
-                curr = curr + ((rat_n.GetValueAsString(row, col)),)
-            existing.add(rat_n.GetValueAsString(row, 14))
+                curr.append(rat_n.GetValueAsString(row, col))
             surveys.append(curr)
     rat = gdal.RasterAttributeTable()
     for entry in expected_fields:
