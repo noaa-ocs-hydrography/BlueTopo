@@ -311,17 +311,17 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
     db_tiles = all_db_tiles(registry_connection)
     # same tiles in tilescheme
     bluetopo_ds = ogr.Open(tile_scheme)
-    lyr_name = bluetopo_ds.GetLayer(0).GetName()
-    tile_string_list = ",".join([f"'{tile['tilename']}'" for tile in db_tiles])
-    sql = f'SELECT st_astext(geom) as wkt_geom, * FROM {lyr_name} WHERE tile IN ({tile_string_list})'
-    lyr_ex = bluetopo_ds.ExecuteSQL(sql)
-    lyr_def = lyr_ex.GetLayerDefn()
+    bluetopo_lyr = bluetopo_ds.GetLayer()
+    lyr_def = bluetopo_lyr.GetLayerDefn()
     bt_tiles = []
-    for ft in lyr_ex:
+    for ft in bluetopo_lyr:
         field_list = {}
         for field_num in range(lyr_def.GetFieldCount()):
+            geom = ft.GetGeometryRef()
+            wkt_geom = geom.ExportToWkt()
             field_name = lyr_def.GetFieldDefn(field_num).name
-            field_list[field_name] = ft.GetField(field_name)
+            field_list[field_name.lower()] = ft.GetField(field_name)
+            field_list['wkt_geom'] = wkt_geom
         bt_tiles.append(field_list)
     # polygons that depict regions
     global_tileset = global_region_tileset(1, '1.2')
@@ -337,10 +337,10 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
             raise ValueError(f"More than one tilename {db_tile['tilename']} found in tileset. Please alert NBS.")
         # proper behavior for following edgecase? 
         # inserted only when delivered exists so indicates delivered date removed post-insertion to None.
-        if bt_tile[0]['Delivered_Date'] is None:
+        if bt_tile[0]['delivered_date'] is None:
             print(f"Warning: Unexpected removal of delivered date for tile {db_tile['tilename']}")
             continue
-        if db_tile['delivered_date'] is None or bt_tile[0]['Delivered_Date'] > db_tile['delivered_date']:
+        if db_tile['delivered_date'] is None or bt_tile[0]['delivered_date'] > db_tile['delivered_date']:
             try:
                 if db_tile['geotiff_disk'] and os.path.isfile(os.path.join(bluetopo_path, db_tile['geotiff_disk'])):
                     os.remove(os.path.join(bluetopo_path, db_tile['geotiff_disk']))
@@ -381,11 +381,11 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
                     gdal.Unlink(global_tileset)
                     raise ValueError(debug + '\nExported debug tileset')
             region_ft = lyr.GetNextFeature()
-            bt_tile[0]['Region'] = region_ft.GetField('Region')
-            insert_tiles.append((bt_tile[0]['tile'], bt_tile[0]['GeoTIFF_Link'],
-                                                        bt_tile[0]['RAT_Link'], bt_tile[0]['Delivered_Date'], 
-                                                        bt_tile[0]['Resolution'], bt_tile[0]['UTM'], 
-                                                        bt_tile[0]['Region'],))
+            bt_tile[0]['region'] = region_ft.GetField('Region')
+            insert_tiles.append((bt_tile[0]['tile'], bt_tile[0]['geotiff_link'],
+                                                        bt_tile[0]['rat_link'], bt_tile[0]['delivered_date'], 
+                                                        bt_tile[0]['resolution'], bt_tile[0]['utm'], 
+                                                        bt_tile[0]['region'],))
     if insert_tiles:
         cursor.executemany('''INSERT INTO tiles(tilename, geotiff_link, rat_link, 
                                         delivered_date, resolution, utm, subregion)
