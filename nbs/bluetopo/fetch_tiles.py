@@ -9,6 +9,7 @@ An example script for downloading BlueTopo datasets from AWS.
 
 """
 
+import sys
 import boto3
 import datetime
 import numpy as np
@@ -350,10 +351,35 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
                 gdal.Unlink(global_tileset)
                 raise e
             # retrieve region for tile
-            lyr = gs.ExecuteSQL(f'Select * from {gs_lyr} where ST_Intersects(ST_GeomFromText("{bt_tile[0]["wkt_geom"]}", 4326), geom)')
+            sql_statement = f'select * from {gs_lyr} where ST_Intersects(ST_GeomFromText("{bt_tile[0]["wkt_geom"]}", 4326), geom)'
+            lyr = gs.ExecuteSQL(sql_statement)
             if lyr.GetFeatureCount() != 1:
-                gdal.Unlink(global_tileset)
-                raise ValueError(f"Error getting subregion for {db_tile['tilename']}")
+                intersected_regions = [feat.GetField('Region') for feat in lyr]
+                debug = f"""
+                        debug:
+                        Error getting subregion for {db_tile['tilename']}.
+                        Intersected subregions {intersected_regions}.
+                        {lyr.GetFeatureCount()} subregion(s).
+                        Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} 
+                        GDAL {gdal.VersionInfo()} 
+                        SQLite {sqlite3.sqlite_version}
+                        Tileset count {gs.GetLayer().GetFeatureCount()}
+                        Tile {bt_tile[0]}
+                        {sql_statement}
+                        """
+                try:
+                    lyr_alt = gs.GetLayer()
+                    lyr_alt.SetSpatialFilter(ogr.CreateGeometryFromWkt(bt_tile[0]["wkt_geom"]))
+                except:
+                    raise ValueError(debug + '\nGeometry Failure')
+                if lyr_alt.GetFeatureCount() == 1:
+                    lyr = lyr_alt
+                else:
+                    if not os.path.exists(os.path.join(bluetopo_path, 'Debug')):
+                        os.makedirs(os.path.join(bluetopo_path, 'Debug'))
+                    ogr.GetDriverByName('GPKG').CopyDataSource(gs, os.path.join(bluetopo_path, "Debug", f"GS_Debug.gpkg"))
+                    gdal.Unlink(global_tileset)
+                    raise ValueError(debug + '\nExported debug tileset')
             region_ft = lyr.GetNextFeature()
             bt_tile[0]['Region'] = region_ft.GetField('Region')
             insert_tiles.append((bt_tile[0]['tile'], bt_tile[0]['GeoTIFF_Link'],
