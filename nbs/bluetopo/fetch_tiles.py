@@ -64,7 +64,11 @@ def download_bluetopo_tesselation(registry_connection: sqlite3.Connection, desti
     destination_name = os.path.join(destination_directory, source_name)
     if not os.path.exists(os.path.dirname(destination_name)):
         os.makedirs(os.path.dirname(destination_name))
-    client.download_file(bucket, source_name, destination_name)
+    try:
+        client.download_file(bucket, source_name, destination_name)
+    except (OSError, PermissionError) as e:
+        print(f"Failed to download BlueTopo tile scheme possibly due to conflict with an open existing file \nPlease close all files and attempt again")
+        sys.exit(1)
     print(f'downloaded {filename}')
     # replace tilescheme record
     cursor.execute('REPLACE INTO tileset(tilescheme, location, downloaded) VALUES(?, ?, ?)',
@@ -316,17 +320,16 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
     bt_tiles = []
     for ft in bluetopo_lyr:
         field_list = {}
+        geom = ft.GetGeometryRef()
+        field_list['wkt_geom'] = geom.ExportToWkt()
         for field_num in range(lyr_def.GetFieldCount()):
-            geom = ft.GetGeometryRef()
-            wkt_geom = geom.ExportToWkt()
             field_name = lyr_def.GetFieldDefn(field_num).name
             field_list[field_name.lower()] = ft.GetField(field_name)
-            field_list['wkt_geom'] = wkt_geom
         bt_tiles.append(field_list)
     # polygons that depict regions
     global_tileset = global_region_tileset(1, '1.2')
     gs = ogr.Open(global_tileset)
-    gs_lyr = gs.GetLayer().GetName()
+    lyr = gs.GetLayer()
     insert_tiles = []
     for db_tile in db_tiles:
         bt_tile = [bt_tile for bt_tile in bt_tiles if db_tile['tilename'] == bt_tile['tile']]
@@ -351,8 +354,7 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
                 gdal.Unlink(global_tileset)
                 raise e
             # retrieve region for tile
-            sql_statement = f'select * from {gs_lyr} where ST_Intersects(ST_GeomFromText("{bt_tile[0]["wkt_geom"]}", 4326), geom)'
-            lyr = gs.ExecuteSQL(sql_statement)
+            lyr.SetSpatialFilter(ogr.CreateGeometryFromWkt(bt_tile[0]["wkt_geom"]))
             if lyr.GetFeatureCount() != 1:
                 intersected_regions = [feat.GetField('Region') for feat in lyr]
                 debug = f"""
@@ -365,21 +367,13 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
                         SQLite {sqlite3.sqlite_version}
                         Tileset count {gs.GetLayer().GetFeatureCount()}
                         Tile {bt_tile[0]}
-                        {sql_statement}
+                        Exported debug tileset
                         """
-                try:
-                    lyr_alt = gs.GetLayer()
-                    lyr_alt.SetSpatialFilter(ogr.CreateGeometryFromWkt(bt_tile[0]["wkt_geom"]))
-                except:
-                    raise ValueError(debug + '\nGeometry Failure')
-                if lyr_alt.GetFeatureCount() == 1:
-                    lyr = lyr_alt
-                else:
-                    if not os.path.exists(os.path.join(bluetopo_path, 'Debug')):
-                        os.makedirs(os.path.join(bluetopo_path, 'Debug'))
-                    ogr.GetDriverByName('GPKG').CopyDataSource(gs, os.path.join(bluetopo_path, "Debug", f"GS_Debug.gpkg"))
-                    gdal.Unlink(global_tileset)
-                    raise ValueError(debug + '\nExported debug tileset')
+                if not os.path.exists(os.path.join(bluetopo_path, 'Debug')):
+                    os.makedirs(os.path.join(bluetopo_path, 'Debug'))
+                ogr.GetDriverByName('GPKG').CopyDataSource(gs, os.path.join(bluetopo_path, "Debug", f"GS_Debug.gpkg"))
+                gdal.Unlink(global_tileset)
+                raise ValueError(debug)
             region_ft = lyr.GetNextFeature()
             bt_tile[0]['region'] = region_ft.GetField('Region')
             insert_tiles.append((bt_tile[0]['tile'], bt_tile[0]['geotiff_link'],

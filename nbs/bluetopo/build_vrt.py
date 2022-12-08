@@ -134,7 +134,7 @@ def build_sub_vrts(subregion: str, mapped_tiles: list, bluetopo_path: str) -> li
         resolution_tiles[mapped_tile['resolution']].append(mapped_tile)
     vrt_list = []
     for resolution, r_tiles in resolution_tiles.items():
-        print(f'Building {subregion["region"]} band {resolution}.')
+        print(f'Building {subregion["region"]} band {resolution}..')
         b_tile_locations = [os.path.join(bluetopo_path, btile['geotiff_disk']) for btile in r_tiles]
         vrt_path = os.path.join(region_storage, subregion["region"] + f'_{resolution}.vrt')
         if '2' in resolution:
@@ -429,6 +429,7 @@ def main(bluetopo_path:str) -> None:
             continue
         utm_storage_add = os.path.join('vrt_tiles', str(ub_utm['utm']) + '.vrt')
         utm_storage = os.path.join(bluetopo_path, utm_storage_add)
+        print(f"Building utm{ub_utm['utm']}..")
         build_vrt(vrt_list, utm_storage, [32,64])
         add_vrt_rat(conn, ub_utm['utm'], bluetopo_path, utm_storage)
         field_set = {'utm_vrt': utm_storage_add, 'utm_ovr': None, 'utm': ub_utm['utm']}
