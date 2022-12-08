@@ -326,6 +326,7 @@ def upsert_tiles(tile_scheme: str, bluetopo_path: str, registry_connection: sqli
             field_name = lyr_def.GetFieldDefn(field_num).name
             field_list[field_name.lower()] = ft.GetField(field_name)
         bt_tiles.append(field_list)
+    bluetopo_ds = None
     # polygons that depict regions
     global_tileset = global_region_tileset(1, '1.2')
     gs = ogr.Open(global_tileset)
