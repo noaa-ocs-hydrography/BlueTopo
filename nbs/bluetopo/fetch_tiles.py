@@ -5,7 +5,7 @@ fetch_tiles.py
 
 glen.rice@noaa.gov 20220614
 
-An example script for downloading BlueTopo datasets from AWS.
+An example script for downloading BlueTopo (and Modeling) datasets from AWS.
 
 """
 
@@ -20,30 +20,36 @@ from botocore.client import Config
 from nbs.bluetopo.build_vrt import connect_to_survey_registry
 from osgeo import ogr, osr, gdal
 
-debug_info = f"""
-        Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} 
-        GDAL {gdal.VersionInfo()} 
-        SQLite {sqlite3.sqlite_version}
-        Date {datetime.datetime.now()}
-        """
 
-def get_tesselation(conn: sqlite3.Connection, root: str, 
-                    bucket: str = 'noaa-ocs-nationalbathymetry-pds',
-                    prefix: str = 'BlueTopo/_BlueTopo_Tile_Scheme/BlueTopo_Tile_Scheme',
+debug_info = f"""
+Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} 
+GDAL {gdal.VersionInfo()} 
+SQLite {sqlite3.sqlite_version}
+Date {datetime.datetime.now()}
+"""
+
+
+def get_tessellation(conn: sqlite3.Connection, 
+                     root: str, 
+                     prefix: str, 
+                     target: str,
+                     bucket: str = 'noaa-ocs-nationalbathymetry-pds'
                     ) -> str:
     """ 
-    Download the BlueTopo tesselation scheme geopackage from AWS.
+    Download the tessellation scheme geopackage from AWS.
 
     Parameters
     ----------
     conn : sqlite3.Connection
-        A database connection object.
+        database connection object.
     root : str
         destination directory for project.
+    prefix : str
+        the prefix for the geopackage on AWS to find the file.
+    target : str
+        the datasource the script will target e.g. 'BlueTopo' or 'Modeling'.
     bucket : str
         AWS bucket for the National Bathymetric Source project.
-    prefix : str
-        The prefix for the geopackage on AWS to find the file.
 
     Returns
     -------
@@ -67,38 +73,47 @@ def get_tesselation(conn: sqlite3.Connection, root: str,
         print(f"No geometry found in {prefix}")
         return None
     source_name = objs["Contents"][0]["Key"]
-    path, filename = os.path.split(source_name)
+    filename = os.path.basename(source_name)
+    relative = os.path.join(target, f"Tessellation", filename)
     if len(objs) > 1:
         print(f"More than one geometry found in {prefix}, using {filename}")
-    destination_name = os.path.join(root, source_name)
+    destination_name = os.path.join(root, relative)
     if not os.path.exists(os.path.dirname(destination_name)):
         os.makedirs(os.path.dirname(destination_name))
     try:
         client.download_file(bucket, source_name, destination_name)
     except (OSError, PermissionError) as e:
-        print(f"Failed to download BlueTopo tile scheme "
+        print(f"Failed to download tile scheme "
                "possibly due to conflict with an open existing file. "
                "Please close all files and attempt again")
         sys.exit(1)
     print(f"downloaded {filename}")
     cursor.execute("""REPLACE INTO tileset(tilescheme, location, downloaded) 
                       VALUES(?, ?, ?)""",
-                    ("BlueTopo", source_name, datetime.datetime.now()))
+                    ("Tessellation", relative, datetime.datetime.now()))
     conn.commit()
     return destination_name
 
 
-def download_tiles(conn: sqlite3.Connection, root: str,
-                   bucket: str = 'noaa-ocs-nationalbathymetry-pds') -> [[str],[str],[str]]:
+def download_tiles(conn: sqlite3.Connection, 
+                   root: str, 
+                   tile_prefix: str, 
+                   target: str,
+                   bucket: str = 'noaa-ocs-nationalbathymetry-pds'
+                  ) -> [[str],[str],[str]]:
     """ 
-    Download BlueTopo tiles' files (geotiff and aux per tile).
+    Download tiles' files (geotiff and aux per tile).
 
     Parameters
     ----------
     conn : sqlite3.Connection
-        A database connection object.
+        database connection object.
     root : str
         destination directory for project.
+    tile_prefix : str
+        s3 prefix for tiles.
+    target : str
+        the datasource the script will target e.g. 'BlueTopo' or 'Modeling'.
     bucket : str
         AWS bucket for the National Bathymetric Source project.
 
@@ -126,34 +141,34 @@ def download_tiles(conn: sqlite3.Connection, root: str,
     tiles_not_found = []
     display_count = 1
     msg = ""
-    for tile_fields in download_tile_list:
-        if (tile_fields["geotiff_disk"] and tile_fields["rat_disk"] 
-        and os.path.isfile(os.path.join(root, tile_fields["geotiff_disk"])) 
-        and os.path.isfile(os.path.join(root, tile_fields["rat_disk"]))):
-            existing_tiles.append(tile_fields["tilename"])
+    for fields in download_tile_list:
+        if (fields["geotiff_disk"] and fields["rat_disk"] 
+        and os.path.isfile(os.path.join(root, fields["geotiff_disk"])) 
+        and os.path.isfile(os.path.join(root, fields["rat_disk"]))):
+            existing_tiles.append(fields["tilename"])
             continue
-        tilename = tile_fields["tilename"]
-        prefix = f"BlueTopo/{tilename}/"
-        objs = pageinator.paginate(Bucket=bucket, Prefix=prefix).build_full_result()
+        tilename = fields["tilename"]
+        pfx = tile_prefix + f"/{tilename}/"
+        objs = pageinator.paginate(Bucket=bucket, Prefix=pfx).build_full_result()
         if len(objs) > 0:
             for object_name in objs["Contents"]:
                 source_name = object_name["Key"]
-                dest = os.path.join("BlueTopo", 
-                                   f"UTM{tile_fields['utm']}", 
+                relative = os.path.join(target, 
+                                   f"UTM{fields['utm']}", 
                                     os.path.basename(source_name))
-                destination_name = os.path.join(root, dest)
+                destination_name = os.path.join(root, relative)
                 if not os.path.exists(os.path.dirname(destination_name)):
                     os.makedirs(os.path.dirname(destination_name))
                 remove_previous = len(msg) * '\b'
-                msg = f"downloading{display_count * '.'}"
+                msg = f"downloading new and any missing tracked tiles{display_count * '.'}"
                 print(remove_previous + msg, end="")
                 display_count += 1
                 client.download_file(bucket, source_name, destination_name)
                 if ".aux" in destination_name.lower():
-                    tile_fields["rat_disk"] = dest
+                    fields["rat_disk"] = relative
                 else:
-                    tile_fields["geotiff_disk"] = dest
-            update_records(conn, tile_fields)
+                    fields["geotiff_disk"] = relative
+            update_records(conn, fields)
             tiles_found.append(tilename)
         else:
             tiles_not_found.append(tilename)
@@ -162,17 +177,20 @@ def download_tiles(conn: sqlite3.Connection, root: str,
     return existing_tiles, tiles_found, tiles_not_found
 
 
-def get_tile_list(desired_area_filename: str, tile_scheme_filename: str) -> [str]:
+def get_tile_list(desired_area_filename: str, 
+                  tile_scheme_filename: str
+                 ) -> [str]:
     """ 
     Get the list of tiles inside the given polygon(s).
 
     Parameters
     ----------
     desired_area_filename : str
-        a gdal compatible file path denoting geometries that reflect the region of interest.
+        a gdal compatible file path denoting geometries that reflect the region 
+        of interest.
     tile_scheme_filename : str
-        a gdal compatible file path denoting geometries that reflect the tesselation scheme 
-        with addressing information for the desired tiles.
+        a gdal compatible file path denoting geometries that reflect the 
+        tessellation scheme with addressing information for the desired tiles.
 
     Returns
     -------
@@ -188,8 +206,8 @@ def get_tile_list(desired_area_filename: str, tile_scheme_filename: str) -> [str
         print("Unable to open tile scheme file")
         return None
     driver = ogr.GetDriverByName("MEMORY")
-    intersection = driver.CreateDataSource("memData")
-    intersect_lyr = intersection.CreateLayer("intersect_lyr", geom_type=ogr.wkbPolygon)
+    intersect = driver.CreateDataSource("memData")
+    intersect_lyr = intersect.CreateLayer("mem", geom_type=ogr.wkbPolygon)
     source_layer = source.GetLayer(0)
     source_crs = source_layer.GetSpatialRef()
     num_target_layers = target.GetLayerCount()
@@ -206,15 +224,18 @@ def get_tile_list(desired_area_filename: str, tile_scheme_filename: str) -> [str
             transformed_input = None
         lyr_defn = intersect_lyr.GetLayerDefn()
         for feature in intersect_lyr:
-            field_list = {}
-            for field_num in range(lyr_defn.GetFieldCount()):
-                field_list[lyr_defn.GetFieldDefn(field_num).name] = feature.GetField(field_num)
-            feature_list.append(field_list)
+            fields = {}
+            for idx in range(lyr_defn.GetFieldCount()):
+                fields[lyr_defn.GetFieldDefn(idx).name] = feature.GetField(idx)
+            feature_list.append(fields)
     return feature_list
 
-def transform_layer(input_layer: ogr.Layer, desired_crs: osr.SpatialReference) -> ogr.DataSource:
+
+def transform_layer(input_layer: ogr.Layer, 
+                    desired_crs: osr.SpatialReference
+                   ) -> ogr.DataSource:
     """ 
-    Transform a provided ogr layer to the provide osr coordinate reference system.
+    Transform a provided ogr layer to the provided coordinate reference system.
 
     Parameters
     ----------
@@ -225,42 +246,45 @@ def transform_layer(input_layer: ogr.Layer, desired_crs: osr.SpatialReference) -
 
     Returns
     -------
-    output_ds : ogr.DataSource
+    out_ds : ogr.DataSource
         transformed ogr memory datasource.
     """
     target_crs = input_layer.GetSpatialRef()
     coord_trans = osr.CoordinateTransformation(target_crs, desired_crs)
     driver = ogr.GetDriverByName("MEMORY")
-    output_ds = driver.CreateDataSource("memData")
-    output_lyr = output_ds.CreateLayer("output_lyr", geom_type=input_layer.GetGeomType())
-    outlayer_defn = output_lyr.GetLayerDefn()
+    out_ds = driver.CreateDataSource("memData")
+    out_lyr = out_ds.CreateLayer("out_lyr", geom_type=input_layer.GetGeomType())
+    out_defn = out_lyr.GetLayerDefn()
     in_feature = input_layer.GetNextFeature()
     while in_feature:
         geom = in_feature.GetGeometryRef()
         geom.Transform(coord_trans)
-        out_feature = ogr.Feature(outlayer_defn)
+        out_feature = ogr.Feature(out_defn)
         out_feature.SetGeometry(geom)
-        output_lyr.CreateFeature(out_feature)
+        out_lyr.CreateFeature(out_feature)
         out_feature = None
         in_feature = input_layer.GetNextFeature()
-    return output_ds
+    return out_ds
+
 
 def update_records(conn: sqlite3.Connection, tile: dict) -> None:
     """ 
-    Update BlueTopo tile record and associated tables in SQLite database.
+    Update tile record and associated tables in SQLite database.
 
     Parameters
     ----------
     conn : sqlite3.Connection
-        A database connection object.
+        database connection object.
     tile : dict
-        BlueTopo tile record.
+        tile record.
     """
     cursor = conn.cursor()
-    cursor.execute("UPDATE tiles SET geotiff_disk = ?, rat_disk = ? where tilename = ?", 
+    cursor.execute("""UPDATE tiles 
+                      SET geotiff_disk = ?, rat_disk = ? 
+                      WHERE tilename = ?""", 
                   (tile["geotiff_disk"], tile["rat_disk"],tile["tilename"],))
-    cursor.execute("""INSERT INTO vrt_subregion(region, utm, res_2_vrt, res_2_ovr, 
-                      res_4_vrt, res_4_ovr, res_8_vrt, res_8_ovr, 
+    cursor.execute("""INSERT INTO vrt_subregion(region, utm, res_2_vrt, 
+                      res_2_ovr, res_4_vrt, res_4_ovr, res_8_vrt, res_8_ovr, 
                       complete_vrt, complete_ovr, built)
                       VALUES(?, ?, ?, ?, ? ,? , ?, ? ,? ,? ,?)
                       ON CONFLICT(region) DO UPDATE
@@ -285,20 +309,21 @@ def update_records(conn: sqlite3.Connection, tile: dict) -> None:
                      (tile["utm"], None, None, 0))
     conn.commit()
 
+
 def insert_new(conn: sqlite3.Connection, tiles: list) -> int:
     """ 
-    Insert new BlueTopo tile records into SQLite database.
+    Insert new tile records into SQLite database.
 
     Parameters
     ----------
     conn : sqlite3.Connection
-        A database connection object.
+        database connection object.
     tiles : list of dict
-        List of BlueTopo tile records.
+        list of tile records.
 
     Returns
     -------
-    tile_list : int
+    int
         amount of delivered tiles from input tiles.
     """
     cursor = conn.cursor()
@@ -309,6 +334,7 @@ def insert_new(conn: sqlite3.Connection, tiles: list) -> int:
     conn.commit()
     return len(tile_list)
 
+
 def all_db_tiles(conn: sqlite3.Connection) -> list:
     """ 
     Retrieve all tile records in tiles table of SQLite database.
@@ -316,7 +342,7 @@ def all_db_tiles(conn: sqlite3.Connection) -> list:
     Parameters
     ----------
     conn : sqlite3.Connection
-        A database connection object.
+        database connection object.
 
     Returns
     -------
@@ -327,55 +353,63 @@ def all_db_tiles(conn: sqlite3.Connection) -> list:
     cursor.execute("SELECT * FROM tiles")
     return [dict(row) for row in cursor.fetchall()]
 
-def upsert_tiles(tile_scheme: str, root: str, conn: sqlite3.Connection) -> None:
+
+def upsert_tiles(conn: sqlite3.Connection, root: str, tile_scheme: str) -> None:
     """ 
-    Update tile records in SQLite database with latest deliveries found in tilescheme.
+    Update tile records in database with latest deliveries found in tilescheme.
 
     Parameters
     ----------
-    tile_scheme : str
-        a gdal compatible file path with the BlueTopo tesselation scheme
+    conn : sqlite3.Connection
+        database connection object.
     root : str
         destination directory for project.
-    conn : sqlite3.Connection
-        A database connection object.
+    tile_scheme : str
+        a gdal compatible file path with the tessellation scheme.
     """
-    cursor = conn.cursor()
+    # database records holds current set
+    # tilescheme polygons has latest set
+    # use the two to see where new tiles or updates to existing tiles exist
+    # use global tileset to map its region
     db_tiles = all_db_tiles(conn)
-    bluetopo_ds = ogr.Open(tile_scheme)
-    bluetopo_lyr = bluetopo_ds.GetLayer()
-    lyr_def = bluetopo_lyr.GetLayerDefn()
-    bt_tiles = []
-    for ft in bluetopo_lyr:
+    ts_ds = ogr.Open(tile_scheme)
+    ts_lyr = ts_ds.GetLayer()
+    ts_defn = ts_lyr.GetLayerDefn()
+    ts_tiles = []
+    for ft in ts_lyr:
         field_list = {}
         geom = ft.GetGeometryRef()
         field_list["wkt_geom"] = geom.ExportToWkt()
-        for field_num in range(lyr_def.GetFieldCount()):
-            field_name = lyr_def.GetFieldDefn(field_num).name
+        for field_num in range(ts_defn.GetFieldCount()):
+            field_name = ts_defn.GetFieldDefn(field_num).name
             field_list[field_name.lower()] = ft.GetField(field_name)
-        bt_tiles.append(field_list)
-    bluetopo_ds = None
+        ts_tiles.append(field_list)
+    ts_ds = None
     global_tileset = global_region_tileset(1, "1.2")
     gs = ogr.Open(global_tileset)
     lyr = gs.GetLayer()
     insert_tiles = []
     for db_tile in db_tiles:
-        bt_tile = [bt_tile for bt_tile in bt_tiles if db_tile["tilename"] == bt_tile["tile"]]
-        if len(bt_tile) == 0:
+        ts_tile = [ts_tile for ts_tile in ts_tiles 
+                           if db_tile["tilename"] == ts_tile["tile"]]
+        if len(ts_tile) == 0:
             print(f"Warning: {db_tile['tilename']} in database appears to have "
-                   "been removed from latest BlueTopo tilescheme")
+                   "been removed from latest tilescheme")
             continue
-        if len(bt_tile) > 1:
-            raise ValueError(f"""More than one tilename {db_tile['tilename']} found in tileset. 
-                                 Please alert NBS. 
-                                 {debug_info}""")
-        # inserted only when delivered exists 
-        # so indicates delivered date removed post-insertion to None.
-        if bt_tile[0]["delivered_date"] is None:
-            print(f"Warning: Unexpected removal of delivered date for tile {db_tile['tilename']}")
+        if len(ts_tile) > 1:
+            raise ValueError(f"More than one tilename {db_tile['tilename']} "
+                              "found in tileset.\n"
+                              "Please alert NBS.\n" 
+                              "{debug_info}")
+        ts_tile = ts_tile[0]
+        # inserted into db only when delivered_date exists
+        # so value of None in ts_tile indicates delivered_date was removed
+        if ts_tile["delivered_date"] is None:
+            print("Warning: Unexpected removal of delivered date " 
+                 f"for tile {db_tile['tilename']}")
             continue
         if ((db_tile["delivered_date"] is None) or 
-        (bt_tile[0]["delivered_date"] > db_tile["delivered_date"])):
+        (ts_tile["delivered_date"] > db_tile["delivered_date"])):
             try:
                 if (db_tile["geotiff_disk"] and 
                 os.path.isfile(os.path.join(root, db_tile["geotiff_disk"]))):
@@ -384,23 +418,26 @@ def upsert_tiles(tile_scheme: str, root: str, conn: sqlite3.Connection) -> None:
                 os.path.isfile(os.path.join(root, db_tile["rat_disk"]))):
                     os.remove(os.path.join(root, db_tile["rat_disk"]))
             except (OSError, PermissionError) as e:
-                print(f"failed to remove older files for tile {db_tile['tilename']}. " 
-                       "please close all files and attempt fetch again.")
+                print("Failed to remove older files for tile "
+                     f"{db_tile['tilename']}. Please close all files and "
+                      "attempt fetch again.")
                 gdal.Unlink(global_tileset)
                 raise e
-            lyr.SetSpatialFilter(ogr.CreateGeometryFromWkt(bt_tile[0]["wkt_geom"]))
+            lyr.SetSpatialFilter(ogr.CreateGeometryFromWkt(ts_tile["wkt_geom"]))
             if lyr.GetFeatureCount() != 1:
                 gdal.Unlink(global_tileset)
-                raise ValueError(f"Error getting subregion for {db_tile['tilename']}. "
-                                 f"{lyr.GetFeatureCount()} subregion(s). "
-                                 f"{debug_info}")
+                raise ValueError("Error getting subregion for "
+                                f"{db_tile['tilename']}. \n"
+                                f"{lyr.GetFeatureCount()} subregion(s). \n"
+                                f"{debug_info}")
             region_ft = lyr.GetNextFeature()
-            bt_tile[0]["region"] = region_ft.GetField("Region")
-            insert_tiles.append((bt_tile[0]["tile"], bt_tile[0]["geotiff_link"],
-                                 bt_tile[0]["rat_link"], bt_tile[0]["delivered_date"], 
-                                 bt_tile[0]["resolution"], bt_tile[0]["utm"], 
-                                 bt_tile[0]["region"],))
+            ts_tile["region"] = region_ft.GetField("Region")
+            insert_tiles.append((ts_tile["tile"], ts_tile["geotiff_link"],
+                                 ts_tile["rat_link"], ts_tile["delivered_date"], 
+                                 ts_tile["resolution"], ts_tile["utm"], 
+                                 ts_tile["region"],))
     if insert_tiles:
+        cursor = conn.cursor()
         cursor.executemany("""INSERT INTO tiles(tilename, geotiff_link, rat_link, 
                               delivered_date, resolution, utm, subregion)
                               VALUES(?, ?, ? ,? ,? ,?, ?)
@@ -417,9 +454,12 @@ def upsert_tiles(tile_scheme: str, root: str, conn: sqlite3.Connection) -> None:
         conn.commit()
     gdal.Unlink(global_tileset)
 
-def convert_base(charset: str, input: int, fill: int) -> str:
+
+def convert_base(charset: str, input: int, minimum: int) -> str:
     """ 
-    Convert integer to new base system using the given symbols with a minimum filled length.
+    Convert integer to new base system using the given symbols with a 
+    minimum length filled using leading characters of the lowest value in the 
+    given charset.
 
     Parameters
     ----------
@@ -428,9 +468,9 @@ def convert_base(charset: str, input: int, fill: int) -> str:
         given will be the symbols used.
     input : int
         integer to convert.
-    fill : int
-        returned output will be adjusted to this desired length with 
-        fill values of the lowest value in charset.
+    minimum : int
+        returned output will be adjusted to this desired length using 
+        leading characters of the lowest value in charset.
 
     Returns
     -------
@@ -441,7 +481,8 @@ def convert_base(charset: str, input: int, fill: int) -> str:
     while input:
         res+=charset[input%len(charset)]
         input//=len(charset)
-    return (res[::-1] or charset[0]).rjust(fill, charset[0])
+    return (res[::-1] or charset[0]).rjust(minimum, charset[0])
+
 
 def global_region_tileset(index: int, size: str) -> str:
     """ 
@@ -510,6 +551,7 @@ def global_region_tileset(index: int, size: str) -> str:
     layer.CommitTransaction()
     return location
 
+
 def sweep_files(conn: sqlite3.Connection, root: str) -> None:
     """ 
     Remove missing files from tracking.
@@ -517,118 +559,148 @@ def sweep_files(conn: sqlite3.Connection, root: str) -> None:
     Parameters
     ----------
     conn : sqlite3.Connection
-        A database connection object.
+        database connection object.
     root : str
         destination directory for project.
     """
     db_tiles = all_db_tiles(conn)
     cursor = conn.cursor()
-    removed_tiles = 0
-    removed_subregions = 0
-    removed_utms = 0
-    for tile_fields in db_tiles:
-        if ((tile_fields["geotiff_disk"] 
-            and os.path.isfile(os.path.join(root, tile_fields["geotiff_disk"])) == False) or 
-           (tile_fields["rat_disk"]
-            and os.path.isfile(os.path.join(root, tile_fields["rat_disk"])) == False)):
+    untracked_tiles = 0
+    untracked_subregions = 0
+    untracked_utms = 0
+    for fields in db_tiles:
+        if (
+        (fields["geotiff_disk"] and 
+        os.path.isfile(os.path.join(root, fields["geotiff_disk"])) == False) or 
+        (fields["rat_disk"] and 
+        os.path.isfile(os.path.join(root, fields["rat_disk"])) == False)
+        ):
             cursor.execute("DELETE FROM tiles where tilename = ? RETURNING *", 
-                           (tile_fields["tilename"],))
-            deleted_tile = cursor.fetchone()
-            if deleted_tile:
-                removed_tiles += 1
+                           (fields["tilename"],))
+            del_tile = cursor.fetchone()
+            if del_tile:
+                untracked_tiles += 1
                 files = ["geotiff_disk", "rat_disk"]
                 for file in files:
                     try:
-                        if (deleted_tile[file] 
-                        and os.path.isfile(os.path.join(root, deleted_tile[file]))):
-                            os.remove(os.path.join(root, deleted_tile[file]))
+                        if (del_tile[file] 
+                        and os.path.isfile(os.path.join(root, del_tile[file]))):
+                            os.remove(os.path.join(root, del_tile[file]))
                     except (OSError, PermissionError):
                         continue
             cursor.execute("""DELETE FROM vrt_subregion 
                             WHERE region NOT IN 
                             (SELECT subregion 
                              FROM tiles 
-                             WHERE geotiff_disk is not null AND rat_disk is not null)
+                             WHERE geotiff_disk is not null 
+                             AND rat_disk is not null)
                             RETURNING *;""")
-            deleted_subregions = cursor.fetchall()
-            removed_subregions += len(deleted_subregions)
-            for deleted_subregion in deleted_subregions:
+            del_subregions = cursor.fetchall()
+            untracked_subregions += len(del_subregions)
+            for del_subregion in del_subregions:
                 files = ["res_2_vrt", "res_2_ovr", "res_4_vrt", "res_4_ovr", 
-                        "res_8_vrt", "res_8_ovr", "complete_vrt", "complete_ovr"]
+                        "res_8_vrt", "res_8_ovr", 
+                        "complete_vrt", "complete_ovr"]
                 for file in files:
                     try:
-                        if (deleted_subregion[file] 
-                        and os.path.isfile(os.path.join(root, deleted_subregion[file]))):
-                            os.remove(os.path.join(root, deleted_subregion[file]))
+                        if (del_subregion[file] and 
+                        os.path.isfile(os.path.join(root, del_subregion[file]))):
+                            os.remove(os.path.join(root, del_subregion[file]))
                     except (OSError, PermissionError):
                         continue
             cursor.execute("""DELETE FROM vrt_utm 
                             WHERE utm NOT IN 
                             (SELECT utm 
                              FROM tiles 
-                             WHERE geotiff_disk is not null AND rat_disk is not null) 
+                             WHERE geotiff_disk is not null 
+                             AND rat_disk is not null) 
                             RETURNING *;""")
-            deleted_utms = cursor.fetchall()
-            removed_utms += len(deleted_utms)
-            for deleted_utm in deleted_utms:
+            del_utms = cursor.fetchall()
+            untracked_utms += len(del_utms)
+            for del_utm in del_utms:
                 files = ["utm_vrt", "utm_ovr"]
                 for file in files:
                     try:
-                        if ((deleted_utm[file]) and 
-                        (os.path.isfile(os.path.join(root, deleted_utm[file])))):
-                            os.remove(os.path.join(root, deleted_utm[file]))
+                        if ((del_utm[file]) and 
+                        (os.path.isfile(os.path.join(root, del_utm[file])))):
+                            os.remove(os.path.join(root, del_utm[file]))
                     except (OSError, PermissionError):
                         continue
             conn.commit()
-    return removed_tiles, removed_subregions, removed_utms
+    return untracked_tiles, untracked_subregions, untracked_utms
 
-def main(destination_path: str, 
+
+def main(root: str, 
          desired_area_filename: str = None, 
-         remove_missing_files: bool = False) -> [[str],[str]]:
+         untrack_missing: bool = False,
+         target: str = None
+        ) -> [[str],[str]]:
     """ 
-    Track tiles. Download tiles. Update already tracked files.
+    Track tiles. Download tiles. Update already tracked tiles.
 
     Parameters
     ----------
-    destination_path : str
+    root : str
         destination directory for project.
     desired_area_filename : str
-        a gdal compatible file path denoting geometries that reflect the region of interest.
-    remove_missing_files : bool
-        if true, files that are missing or deleted will be removed from tracking rather than 
-        remaining in system to be potentially redownloaded.
+        a gdal compatible file path denoting geometries that reflect the region 
+        of interest.
+    untrack_missing : bool
+        if true, files that are missing or deleted will be removed from tracking 
+        rather than remaining in system to be potentially redownloaded.
+    target : str
+        the datasource the script will target. only must be specified if it is 
+        not BlueTopo e.g. 'Modeling'.
 
     Returns
     -------
-    tiles_found : list
+    found : list
         tiles downloaded.
-    tiles_not_found : list
+    not_found : list
         tiles not downloaded.
     """
+    if target is None or target.lower() == "bluetopo":
+        target = "BlueTopo"
+        geom_prefix = "BlueTopo/_BlueTopo_Tile_Scheme/BlueTopo_Tile_Scheme"
+        tile_prefix = "BlueTopo"
+
+    elif target.lower() == "modeling":
+        target = "Modeling"
+        geom_prefix = "Test-and-Evaluation/Modeling/_Modeling_Tile_Scheme/Modeling_Tile_Scheme"
+        tile_prefix = "Test-and-Evaluation/Modeling"
+
+    else:
+        raise ValueError(f"Invalid target data: {target}")
+
     start = datetime.datetime.now()
-    print(f"Beginning work on {destination_path}")
-    if not os.path.exists(destination_path):
-        os.makedirs(destination_path)
-    conn = connect_to_survey_registry(destination_path)
-    bluetopo_geometry_filename = get_tesselation(conn, destination_path)
-    if remove_missing_files:
-        removed_tiles, removed_subregions, removed_utms = sweep_files(conn, destination_path)
-        print(f"Removed {removed_tiles} tile(s), "
-              f"{removed_subregions} subregion vrt(s), "
-              f"{removed_utms} utm vrt(s)")
+    print(f"{target}: Beginning work on {root}")
+    if not os.path.exists(root):
+        os.makedirs(root)
+
+    conn = connect_to_survey_registry(root, target)
+    geom_file = get_tessellation(conn, root, geom_prefix, target)
+
+    if untrack_missing:
+        untracked_tiles, untracked_sr, untracked_utms = sweep_files(conn, root)
+        print(f"Untracked {untracked_tiles} tile(s), "
+              f"{untracked_sr} subregion vrt(s), "
+              f"{untracked_utms} utm vrt(s)")
+
     if desired_area_filename:
         if not os.path.isfile(desired_area_filename):
             raise ValueError(f"The geometry {desired_area_filename} for "
                               "determining what to download does not exist.")
-        tile_list = get_tile_list(desired_area_filename, bluetopo_geometry_filename)
-        delivered_tile_count = insert_new(conn, tile_list)
-        print(f"{delivered_tile_count} available BlueTopo tile(s) discovered " 
-              f"in a total of {len(tile_list)} intersected tile(s) with given polygon.")
-    upsert_tiles(bluetopo_geometry_filename, destination_path, conn)
-    existing_tiles, tiles_found, tiles_not_found = download_tiles(conn, destination_path)
-    done = datetime.datetime.now()
-    lapse = done - start
-    print(f"\nOperation complete after {lapse} with {len(existing_tiles)} already existing tiles, "
-          f"{len(tiles_found)} tiles downloaded and {len(tiles_not_found)} "
+        tile_list = get_tile_list(desired_area_filename, geom_file)
+        available_tile_count = insert_new(conn, tile_list)
+        print(f"Tracking {available_tile_count} available {target} tile(s) "
+              f"discovered in a total of {len(tile_list)} intersected tile(s) "
+               "with given polygon.")
+
+    upsert_tiles(conn, root, geom_file)
+    existing, found, not_found = download_tiles(conn, root, tile_prefix, target)
+
+    lapse = datetime.datetime.now() - start
+    print(f"\nOperation complete after {lapse} with {len(existing)} already "
+          f"existing tiles, {len(found)} tiles downloaded and {len(not_found)} "
           f"not available on AWS.")
-    return tiles_found, tiles_not_found
+    return found, not_found
