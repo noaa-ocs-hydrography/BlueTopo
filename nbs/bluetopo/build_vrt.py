@@ -34,7 +34,7 @@ expected_fields = \
 
 
 def connect_to_survey_registry(root: str, target: str) -> sqlite3.Connection:
-    """ 
+    """
     Create new or connect to existing SQLite database.
 
     Parameters
@@ -98,12 +98,12 @@ def connect_to_survey_registry(root: str, target: str) -> sqlite3.Connection:
     return conn
 
 
-def build_sub_vrts(subregion: str, 
-                   subregion_tiles: list, 
-                   root: str, 
+def build_sub_vrts(subregion: str,
+                   subregion_tiles: list,
+                   root: str,
                    target: str
                   ) -> dict:
-    """ 
+    """
     Build the VRTs of a given subregion.
 
     Parameters
@@ -183,7 +183,7 @@ def build_sub_vrts(subregion: str,
 
 
 def build_vrt(files: list, vrt_path: str, levels: list) -> None:
-    """ 
+    """
     Build VRT from files.
 
     Parameters
@@ -201,12 +201,12 @@ def build_vrt(files: list, vrt_path: str, levels: list) -> None:
         if os.path.isfile(vrt_path + ".ovr"):
             os.remove(vrt_path + ".ovr")
     except (OSError, PermissionError) as e:
-        print(f"Failed to remove older vrt files for {vrt_path}\n" 
+        print(f"Failed to remove older vrt files for {vrt_path}\n"
                "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, 
-                                       VRTNodata=np.nan, 
-                                       resampleAlg="near", 
+    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan,
+                                       VRTNodata=np.nan,
+                                       resampleAlg="near",
                                        resolution="highest")
     vrt = gdal.BuildVRT(vrt_path, files, options=vrt_options)
     band1 = vrt.GetRasterBand(1)
@@ -221,12 +221,12 @@ def build_vrt(files: list, vrt_path: str, levels: list) -> None:
     vrt = None
 
 
-def add_vrt_rat(conn: sqlite3.Connection, 
-                utm: str, 
-                root: str, 
+def add_vrt_rat(conn: sqlite3.Connection,
+                utm: str,
+                root: str,
                 vrt_path: str
                ) -> None:
-    """ 
+    """
     Create a raster attribute table for the VRT.
 
     Parameters
@@ -264,9 +264,9 @@ def add_vrt_rat(conn: sqlite3.Connection,
                 if survey[0] == rat_n.GetValueAsString(row, 0):
                     survey[1] = int(survey[1]) + rat_n.GetValueAsInt(row, 1)
                     # this is the count field
-                    # GFU_PixelCount usage has support as int dtype in some 
+                    # GFU_PixelCount usage has support as int dtype in some
                     # software so avoiding changing it to python float (double)
-                    # this is a temp solution to avoid overflow error which can 
+                    # this is a temp solution to avoid overflow error which can
                     # occur with generalization in vrts of extreme coverage
                     if survey[1] > 2147483647:
                         survey[1] = 2147483647
@@ -306,11 +306,11 @@ def add_vrt_rat(conn: sqlite3.Connection,
     contributor_band.SetDefaultRAT(rat)
 
 
-def select_tiles_by_subregion(root: str, 
-                              conn: sqlite3.Connection, 
+def select_tiles_by_subregion(root: str,
+                              conn: sqlite3.Connection,
                               subregion: str
                              ) -> list:
-    """ 
+    """
     Retrieve all tile records with files in the given subregion.
 
     Parameters
@@ -330,7 +330,7 @@ def select_tiles_by_subregion(root: str,
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM tiles WHERE subregion = ?", (subregion,))
     tiles = [dict(row) for row in cursor.fetchall()]
-    existing_tiles = [tile for tile in tiles 
+    existing_tiles = [tile for tile in tiles
                       if tile["geotiff_disk"] and tile["rat_disk"]
                       and os.path.isfile(os.path.join(root, tile["geotiff_disk"]))
                       and os.path.isfile(os.path.join(root, tile["rat_disk"]))]
@@ -342,11 +342,11 @@ def select_tiles_by_subregion(root: str,
     return existing_tiles
 
 
-def select_subregions_by_utm(root: str, 
-                             conn: sqlite3.Connection, 
+def select_subregions_by_utm(root: str,
+                             conn: sqlite3.Connection,
                              utm: str
                             ) -> list:
-    """ 
+    """
     Retrieve all subregion records with files in the given UTM.
 
     Parameters
@@ -364,8 +364,8 @@ def select_subregions_by_utm(root: str,
         list of subregion records in UTM zone.
     """
     cursor = conn.cursor()
-    cursor.execute("""SELECT * FROM vrt_subregion 
-                      WHERE utm = ? AND built = 1""", 
+    cursor.execute("""SELECT * FROM vrt_subregion
+                      WHERE utm = ? AND built = 1""",
                     (utm,))
     subregions = [dict(row) for row in cursor.fetchall()]
     for s in subregions:
@@ -385,7 +385,7 @@ def select_subregions_by_utm(root: str,
 
 
 def select_unbuilt_subregions(conn: sqlite3.Connection) -> list:
-    """ 
+    """
     Retrieve all unbuilt subregion records.
 
     Parameters
@@ -405,7 +405,7 @@ def select_unbuilt_subregions(conn: sqlite3.Connection) -> list:
 
 
 def select_unbuilt_utms(conn: sqlite3.Connection) -> list:
-    """ 
+    """
     Retrieve all unbuilt utm records.
 
     Parameters
@@ -425,7 +425,7 @@ def select_unbuilt_utms(conn: sqlite3.Connection) -> list:
 
 
 def update_subregion(conn: sqlite3.Connection, fields: dict) -> None:
-    """ 
+    """
     Update subregion records with given path values.
 
     Parameters
@@ -433,25 +433,25 @@ def update_subregion(conn: sqlite3.Connection, fields: dict) -> None:
     conn : sqlite3.Connection
         database connection object.
     fields : dict
-        dictionary with the name of the subregion and paths for its associated 
+        dictionary with the name of the subregion and paths for its associated
         VRT and OVR files.
     """
     cursor = conn.cursor()
-    cursor.execute("""UPDATE vrt_subregion 
-                      SET res_2_vrt = ?, res_2_ovr = ?, res_4_vrt = ?, 
-                      res_4_ovr = ?, res_8_vrt = ?, res_8_ovr = ?, 
-                      complete_vrt = ?, complete_ovr = ?, built = 1 
+    cursor.execute("""UPDATE vrt_subregion
+                      SET res_2_vrt = ?, res_2_ovr = ?, res_4_vrt = ?,
+                      res_4_ovr = ?, res_8_vrt = ?, res_8_ovr = ?,
+                      complete_vrt = ?, complete_ovr = ?, built = 1
                       WHERE region = ?""",
-                     (fields["res_2_vrt"], fields["res_2_ovr"], 
-                      fields["res_4_vrt"], fields["res_4_ovr"], 
-                      fields["res_8_vrt"], fields["res_8_ovr"], 
+                     (fields["res_2_vrt"], fields["res_2_ovr"],
+                      fields["res_4_vrt"], fields["res_4_ovr"],
+                      fields["res_8_vrt"], fields["res_8_ovr"],
                       fields["complete_vrt"], fields["complete_ovr"],
                       fields["region"]))
     conn.commit()
 
 
 def update_utm(conn: sqlite3.Connection, fields: dict) -> None:
-    """ 
+    """
     Update utm records with given path values.
 
     Parameters
@@ -459,20 +459,20 @@ def update_utm(conn: sqlite3.Connection, fields: dict) -> None:
     conn : sqlite3.Connection
         database connection object.
     fields : dict
-        dictionary with the name of the UTM zone and paths for its associated 
+        dictionary with the name of the UTM zone and paths for its associated
         VRT and OVR files.
     """
     cursor = conn.cursor()
-    cursor.execute("""UPDATE vrt_utm 
-                      SET utm_vrt = ?, utm_ovr = ?, built = 1 
+    cursor.execute("""UPDATE vrt_utm
+                      SET utm_vrt = ?, utm_ovr = ?, built = 1
                       WHERE utm = ?""",
                    (fields["utm_vrt"], fields["utm_ovr"], fields["utm"],))
     conn.commit()
 
 
 def missing_subregions(root: str, conn: sqlite3.Connection) -> int:
-    """ 
-    Confirm built subregions's associated VRT and OVR files exists. 
+    """
+    Confirm built subregions's associated VRT and OVR files exists.
     If the files do not exist, then change the subregion record to unbuilt.
 
     Parameters
@@ -504,15 +504,15 @@ def missing_subregions(root: str, conn: sqlite3.Connection) -> int:
         (s["complete_ovr"] is None or not os.path.isfile(os.path.join(root, s["complete_ovr"])))
         ):
             missing_subregion_count += 1
-            cursor.execute("""UPDATE vrt_subregion 
-                           SET res_2_vrt = ?, res_2_ovr = ?, res_4_vrt = ?, 
-                           res_4_ovr = ?, res_8_vrt = ?, res_8_ovr = ?, 
-                           complete_vrt = ?, complete_ovr = ?, built = 0 
+            cursor.execute("""UPDATE vrt_subregion
+                           SET res_2_vrt = ?, res_2_ovr = ?, res_4_vrt = ?,
+                           res_4_ovr = ?, res_8_vrt = ?, res_8_ovr = ?,
+                           complete_vrt = ?, complete_ovr = ?, built = 0
                            WHERE region = ?""",
-                           (None, None, None, None, None, None, None, None, 
+                           (None, None, None, None, None, None, None, None,
                            s["region"],))
-            cursor.execute("""UPDATE vrt_utm 
-                              SET utm_vrt = ?, utm_ovr = ?, built = 0 
+            cursor.execute("""UPDATE vrt_utm
+                              SET utm_vrt = ?, utm_ovr = ?, built = 0
                               WHERE utm = ?""",
                            (None, None, s["utm"],))
             conn.commit()
@@ -520,8 +520,8 @@ def missing_subregions(root: str, conn: sqlite3.Connection) -> int:
 
 
 def missing_utms(root: str, conn: sqlite3.Connection) -> int:
-    """ 
-    Confirm built utm's associated VRT and OVR files exists. 
+    """
+    Confirm built utm's associated VRT and OVR files exists.
     If the files do not exist, then change the utm record to unbuilt.
 
     Parameters
@@ -545,8 +545,8 @@ def missing_utms(root: str, conn: sqlite3.Connection) -> int:
         or os.path.isfile(os.path.join(root, utm["utm_vrt"])) == False
         or os.path.isfile(os.path.join(root, utm["utm_ovr"])) == False):
             missing_utm_count += 1
-            cursor.execute("""UPDATE vrt_utm 
-                              SET utm_vrt = ?, utm_ovr = ?, built = 0 
+            cursor.execute("""UPDATE vrt_utm
+                              SET utm_vrt = ?, utm_ovr = ?, built = 0
                               WHERE utm = ?""",
                            (None, None, utm["utm"],))
             conn.commit()
@@ -554,12 +554,12 @@ def missing_utms(root: str, conn: sqlite3.Connection) -> int:
 
 
 def main(root:str, target: str = None) -> None:
-    """ 
-    Build a gdal VRT for all available tiles. 
-    This VRT is a collection of smaller areas described as VRTs.  
-    Nominally 2 meter, 4 meter, and 8 meter data are collected with overviews. 
+    """
+    Build a gdal VRT for all available tiles.
+    This VRT is a collection of smaller areas described as VRTs.
+    Nominally 2 meter, 4 meter, and 8 meter data are collected with overviews.
     These data are then added to 16 meter data for the subregion.
-    The subregions are then collected into a UTM zone VRT where higher level 
+    The subregions are then collected into a UTM zone VRT where higher level
     overviews are made.
 
     Parameters
@@ -567,7 +567,7 @@ def main(root:str, target: str = None) -> None:
     root
         destination directory for project.
     target : str
-        the datasource the script will target. only must be specified if it is 
+        the datasource the script will target. only must be specified if it is
         not BlueTopo e.g. 'Modeling'.
     """
     if int(gdal.VersionInfo()) < 3040000:
@@ -579,7 +579,7 @@ def main(root:str, target: str = None) -> None:
 
     if target is None or target.lower() == "bluetopo":
         target = "BlueTopo"
-        
+
     elif target.lower() == "modeling":
         target = "Modeling"
 
@@ -603,7 +603,7 @@ def main(root:str, target: str = None) -> None:
     if missing_subregion_count:
         print(f"{missing_subregion_count} subregion vrts files missing. "
                "Added to build list.")
-    
+
     # build subregion vrts
     unbuilt_subregions = select_unbuilt_subregions(conn)
     if len(unbuilt_subregions) > 0:
@@ -636,14 +636,14 @@ def main(root:str, target: str = None) -> None:
                         for subregion in subregions]
             if len(vrt_list) < 1:
                 continue
-            rel_path = os.path.join(f"{target}_VRT", 
+            rel_path = os.path.join(f"{target}_VRT",
                                     f"{target}_Fetched_UTM{ub_utm['utm']}.vrt")
             utm_vrt = os.path.join(root, rel_path)
             print(f"Building utm{ub_utm['utm']}...")
             build_vrt(vrt_list, utm_vrt, [32,64])
             add_vrt_rat(conn, ub_utm['utm'], root, utm_vrt)
-            fields = {'utm_vrt': rel_path, 
-                      'utm_ovr': None, 
+            fields = {'utm_vrt': rel_path,
+                      'utm_ovr': None,
                       'utm': ub_utm['utm']}
             if os.path.isfile(os.path.join(root, rel_path + '.ovr')):
                 fields['utm_ovr'] = rel_path + '.ovr'
