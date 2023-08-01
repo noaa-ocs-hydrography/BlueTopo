@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "BlueTopo"
+version = "0.3.0"
+authors = [
+    {name = "Glen Rice", email = "ocs.nbs@noaa.gov"},
+    {name = "Tashi Geleg", email = "ocs.nbs@noaa.gov"},
+]
+description = "National Bathymetric Source Project BlueTopo"
+readme = "README.md"
+license = {file ="LICENSE"}
+keywords = ["BlueTopo", "National Bathymetric Source", "Bathymetry"]
+dependencies = [
+    "numpy",
+    "boto3",
+]
+
+[project.scripts]
+fetch_tiles = "nbs.bluetopo.cli:fetch_tiles_command"
+build_vrt = "nbs.bluetopo.cli:build_vrt_command"
+
+[project.urls]
+homepage = "https://www.nauticalcharts.noaa.gov/data/bluetopo.html"
+source = "https://github.com/noaa-ocs-hydrography/BlueTopo"

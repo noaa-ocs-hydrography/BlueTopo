@@ -641,16 +641,20 @@ def main(root: str,
     Parameters
     ----------
     root : str
-        destination directory for project.
+        The directory path to use. Will create if it does not currently exist. 
+        Required argument.
     desired_area_filename : str
-        a gdal compatible file path denoting geometries that reflect the region
-        of interest.
+        The geometry file to use to find intersecting available tiles. 
+        The returned tile ids at the time of intersection will be added to 
+        tracking. fetch_tiles will stay up to date with the latest data 
+        available from the NBS for all tracked tiles. This argument is 
+        not necessary if you do not want to add new tile ids to tracking.
     untrack_missing : bool
-        if true, files that are missing or deleted will be removed from tracking
-        rather than remaining in system to be potentially redownloaded.
+        This flag will untrack tiles that have missing files in your local 
+        download directory. fetch_tiles will no longer retrieve these tiles.
     target : str
-        the datasource the script will target. only must be specified if it is
-        not BlueTopo e.g. 'Modeling'.
+        The NBS offers various products to different end-users. Some are available publicly. 
+        Use this argument to identify which product you want to target. BlueTopo is the default.
 
     Returns
     -------

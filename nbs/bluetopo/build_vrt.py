@@ -565,10 +565,11 @@ def main(root:str, target: str = None) -> None:
     Parameters
     ----------
     root
-        destination directory for project.
+        The directory path to use. Will create if it does not currently exist. 
+        Required argument.
     target : str
-        the datasource the script will target. only must be specified if it is
-        not BlueTopo e.g. 'Modeling'.
+        The NBS offers various products to different end-users. Some are available publicly. 
+        Use this argument to identify which product you want to target. BlueTopo is the default.
     """
     if int(gdal.VersionInfo()) < 3040000:
         raise RuntimeError("Please update GDAL to >=3.4 to run build_vrt. \n"
