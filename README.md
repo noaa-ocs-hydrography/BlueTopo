@@ -1,18 +1,32 @@
-BlueTopo
-========
+[![alt text](https://www.nauticalcharts.noaa.gov/data/images/bluetopo/logo.png)](https://www.nauticalcharts.noaa.gov/data/bluetopo.html)
 
-Overview
---------
+---
 
-Examples scripts for accessing and using BlueTopo.
+<p align="center">
+    <a href="#background">Background</a> •
+    <a href="#requirements">Requirements</a> •
+    <a href="#installation">Installation</a> •
+    <a href="#quickstart">Quickstart</a> •
+    <a href="#cli">CLI</a> •
+    <a href="#notes">Notes</a> •
+    <a href="#known-issues">Issues</a> •
+    <a href="#authors">Contact</a>
+</p>
 
-Background
-----------
+## Overview
+This project simplifies getting BlueTopo data in your area of interest.
 
-https://www.nauticalcharts.noaa.gov/data/bluetopo.html
+## Background
 
-Requirements
-------------
+[BlueTopo](https://www.nauticalcharts.noaa.gov/data/bluetopo.html) is the best available public bathymetric data of U.S. waters.
+
+Created by the [NOAA Office of Coast Survey](https://www.nauticalcharts.noaa.gov/) and its National Bathymetric Source project, [BlueTopo data](https://www.nauticalcharts.noaa.gov/data/bluetopo_specs.html) provides depth information nationwide as well as the uncertainty tied to that depth value and information on the survey source that it originated from. 
+
+This data is presented in a multiband high resolution GeoTIFF with an associated raster attribute table. 
+
+For answers to frequently asked questions, visit the [FAQ](https://www.nauticalcharts.noaa.gov/data/bluetopo_faq.html).
+
+## Requirements
 
 This codebase is written for Python 3 and relies on the following python
 packages:
@@ -21,17 +35,25 @@ packages:
 -   numpy
 -   boto3
 
-Installation
-------------
+## Installation
 
-Download the repo and use.  Alternatively, you may pip install and use the CLI. 
+Download and install conda (If you have not already): [conda installation](https://docs.conda.io/projects/conda/en/latest/user-guide/install/)
 
-The two methods are detailed in quickstart guides below. Additional changes to come, when time is available, to improve API to allow ease of use importing into other projects.
+Download and install git (If you have not already): [git installation](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 
-Quickstart
--------------
+In the command line, create an environment with required packages
 
-Download the repo locally and confirm package requirements above are met
+```
+conda create -n bluetopo_env -c conda-forge 'gdal>=3.4'
+```
+```
+conda activate bluetopo_env
+```
+```
+pip install git+https://github.com/noaa-ocs-hydrography/BlueTopo
+```
+
+## Quickstart
 
 To download the desired files, first create a geometry file (such as a geopackage) with a polygon depicting the area of interest.  Then run the following commands inside of a Python shell:
 
@@ -49,27 +71,11 @@ from nbs.bluetopo import build_vrt
 ```python
 build_vrt.main(r'C:\download_path')
 ```
-CLI Quickstart
--------------
+## CLI
 
-Download and install conda (If you have not already): [conda installation](https://docs.conda.io/projects/conda/en/latest/user-guide/install/)
+The CLI consists of two commands `fetch_tiles` and `build_vrt`. Confirm that you have the environment created in the installation guide activated.
 
-Download and install git (If you have not already): [git installation](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
-
-In the command line, create an environment with required packages
-
-```
-conda create -n bluetopo_env -c conda-forge 'gdal>=3.4'
-```
-```
-conda activate bluetopo_env
-```
-```
-pip install git+https://github.com/noaa-ocs-hydrography/BlueTopo
-```
-**Usage**
-
-Pass a directory path for your downloads and a geometry filepath to pull available intersecting BlueTopo tiles
+In the command line, pass a directory path for your downloads and a geometry filepath to pull available intersecting BlueTopo tiles
 ```
 fetch_tiles -d [DIRECTORY PATH] -g [GEOMETRY FILE PATH]
 ```
@@ -77,37 +83,32 @@ Pass the same directory path to the build_vrt command to create a VRT from the r
 ```
 build_vrt -d [DIRECTORY PATH]
 ```
-Use `-h` for help and to see additional arguments
+Use `-h` for help and to see additional arguments.
 
-For most usecases, reusing the commands above to stay up to date in your area of interest is adequate
+For most usecases, reusing the commands above to stay up to date in your area of interest is adequate.
 
-Notes
--------
+## Notes
 
 In addition to BlueTopo, modeling data is available. You may target modeling data using the target argument. The
 primary difference between the two is the vertical datum. Modeling data is on a low water datum.
 
-Known Issues
--------
+## Known Issues
 
 You may encounter errors if you fetch tiles in the S3 bucket while they are actively being updated by the NBS.
 
-Authors
--------
+## Authors
 
 -   Glen Rice (NOAA), <ocs.nbs@noaa.gov>
 
 -   Tashi Geleg (Lynker / NOAA), <ocs.nbs@noaa.gov>
 
 
-License
--------
+## License
 
 This work, as a whole, falls under Creative Commons Zero (see
 [LICENSE](LICENSE)).
 
-Disclaimer
-----------
+## Disclaimer
 
 This repository is a scientific product and is not official
 communication of the National Oceanic and Atmospheric Administration, or
