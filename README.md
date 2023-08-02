@@ -20,7 +20,7 @@ This project simplifies getting BlueTopo data in your area of interest.
 
 [BlueTopo](https://www.nauticalcharts.noaa.gov/data/bluetopo.html) is a compilation of the best available public bathymetric data of U.S. waters.
 
-Created by [NOAA Office of Coast Survey's](https://www.nauticalcharts.noaa.gov/) National Bathymetric Source project, [BlueTopo data](https://www.nauticalcharts.noaa.gov/data/bluetopo_specs.html) aims to provide depth information nationwide with the vertical uncertainty tied to that depth estimate as well as information on the survey source that it originated from. 
+Created by [NOAA Office of Coast Survey's](https://www.nauticalcharts.noaa.gov/) National Bathymetric Source project, [BlueTopo data](https://www.nauticalcharts.noaa.gov/data/bluetopo_specs.html) intends to provide depth information nationwide with the vertical uncertainty tied to that depth estimate as well as information on the survey source that it originated from. 
 
 This data is presented in a multiband high resolution GeoTIFF with an associated raster attribute table. 
 
