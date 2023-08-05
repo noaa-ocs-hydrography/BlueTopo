@@ -9,7 +9,6 @@
     <a href="#quickstart">Quickstart</a> •
     <a href="#cli">CLI</a> •
     <a href="#notes">Notes</a> •
-    <a href="#known-issues">Issues</a> •
     <a href="#authors">Contact</a>
 </p>
 
@@ -41,7 +40,7 @@ Download and install conda (If you have not already): [conda installation](https
 
 Download and install git (If you have not already): [git installation](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 
-In the command line, create an environment with required packages
+In the command line, create an environment with the required packages:
 
 ```
 conda create -n bluetopo_env -c conda-forge 'gdal>=3.4'
@@ -71,15 +70,16 @@ from nbs.bluetopo import build_vrt
 ```python
 build_vrt.main(r'C:\download_path')
 ```
+
 ## CLI
 
-The CLI consists of two commands `fetch_tiles` and `build_vrt`. Confirm that you have the environment created in the installation guide activated.
+You can also use the command line. Confirm the environment we created during installation is activated.
 
-In the command line, pass a directory path for your downloads and a geometry filepath to pull available intersecting BlueTopo tiles
+To fetch the latest BlueTopo data, use `fetch_tiles` passing a directory path and a geometry file path with a polygon depicting your area of interest:
 ```
 fetch_tiles -d [DIRECTORY PATH] -g [GEOMETRY FILE PATH]
 ```
-Pass the same directory path to the build_vrt command to create a VRT from the retrieved tiles
+Pass the same directory path to `build_vrt` to create a VRT from the fetched data:
 ```
 build_vrt -d [DIRECTORY PATH]
 ```
@@ -92,16 +92,11 @@ For most usecases, reusing the commands above to stay up to date in your area of
 In addition to BlueTopo, modeling data is available. You may target modeling data using the target argument. The
 primary difference between the two is the vertical datum. Modeling data is on a low water datum.
 
-## Known Issues
-
-You may encounter errors if you fetch tiles in the S3 bucket while they are actively being updated by the NBS.
-
 ## Authors
 
 -   Glen Rice (NOAA), <ocs.nbs@noaa.gov>
 
 -   Tashi Geleg (Lynker / NOAA), <ocs.nbs@noaa.gov>
-
 
 ## License
 
