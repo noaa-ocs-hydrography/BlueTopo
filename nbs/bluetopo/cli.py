@@ -34,18 +34,17 @@ def build_vrt_command():
         required=True,
     )
     parser.add_argument(
-        "-t",
-        "--targ",
-        "--target",
+        "-s",
+        "--source",
         help=(
             "The NBS offers various products to different end-users. "
             "Some are available publicly. Use this argument to identify "
-            "which product you want to target. BlueTopo is the default."
+            "the data source. BlueTopo is the default."
         ),
         type=str.lower,
         choices=["bluetopo", "modeling"],
         default="bluetopo",
-        dest="target",
+        dest="source",
         nargs="?",
     )
     parser.add_argument(
@@ -64,7 +63,11 @@ def build_vrt_command():
         type=str_to_bool,
     )
     args = parser.parse_args()
-    vrt(root=args.dir, target=args.target, relative_to_vrt=args.relative_to_vrt)
+    vrt(
+        project_dir=args.dir,
+        data_source=args.source,
+        relative_to_vrt=args.relative_to_vrt,
+    )
 
 
 def fetch_tiles_command():
@@ -100,18 +103,17 @@ def fetch_tiles_command():
         nargs="?",
     )
     parser.add_argument(
-        "-t",
-        "--targ",
-        "--target",
+        "-s",
+        "--source",
         help=(
             "The NBS offers various products to different end-users. "
             "Some are available publicly. Use this argument to identify "
-            "which product you want to target. BlueTopo is the default."
+            "the data source. BlueTopo is the default."
         ),
         type=str.lower,
         choices=["bluetopo", "modeling"],
         default="bluetopo",
-        dest="target",
+        dest="source",
         nargs="?",
     )
     parser.add_argument(
@@ -126,8 +128,8 @@ def fetch_tiles_command():
     )
     args = parser.parse_args()
     fetch(
-        root=args.dir,
+        project_dir=args.dir,
         desired_area_filename=args.geom,
         untrack_missing=args.untrack,
-        target=args.target,
+        data_source=args.source,
     )
