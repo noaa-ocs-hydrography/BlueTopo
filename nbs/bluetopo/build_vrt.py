@@ -12,7 +12,7 @@ from osgeo import gdal
 
 gdal.UseExceptions()
 gdal.SetConfigOption("COMPRESS_OVERVIEW", "DEFLATE")
-
+gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
 
 expected_fields = dict(
     value=[int, gdal.GFU_MinMax],
@@ -36,23 +36,34 @@ expected_fields = dict(
 )
 
 
-def connect_to_survey_registry(root: str, target: str) -> sqlite3.Connection:
+def connect_to_survey_registry(
+    project_dir: str, data_source: str
+) -> sqlite3.Connection:
     """
     Create new or connect to existing SQLite database.
 
     Parameters
     ----------
-    root : str
+    project_dir : str
         destination directory for project.
-    target : str
-        the datasource the script will target e.g. 'BlueTopo' or 'Modeling'.
+    data_source : str
+        the data source for the project e.g. 'BlueTopo' or 'Modeling'.
 
     Returns
     -------
     conn : sqlite3.Connection
         connection to SQLite database.
     """
-    database_path = os.path.join(root, f"{target.lower()}_registry.db")
+    tileset_fields = {"tilescheme": "text", "location": "text", "downloaded": "text"}
+    vrt_subregion_fields = {"region": "text", "utm": "text", "res_2_vrt": "text", "res_2_ovr": "text",
+                            "res_4_vrt": "text", "res_4_ovr": "text", "res_8_vrt": "text", "res_8_ovr": "text",
+                            "complete_vrt": "text", "complete_ovr": "text", "built": "integer"}
+    vrt_utm_fields = {"utm": "text", "utm_vrt": "text", "utm_ovr": "text", "built": "integer"}
+    vrt_tiles = {"tilename": "text", "geotiff_link": "text", "rat_link": "text", "delivered_date": "text",
+                 "resolution": "text", "utm": "text", "subregion": "text", "geotiff_disk": "text",
+                 "rat_disk": "text", "geotiff_sha256_checksum": "text", "rat_sha256_checksum": "text",
+                 "geotiff_verified": "text", "rat_verified": "text"}
+    database_path = os.path.join(project_dir, f"{data_source.lower()}_registry.db")
     conn = None
     try:
         conn = sqlite3.connect(database_path)
@@ -63,40 +74,65 @@ def connect_to_survey_registry(root: str, target: str) -> sqlite3.Connection:
     if conn is not None:
         try:
             cursor = conn.cursor()
-            cursor.executescript(
-                """CREATE TABLE IF NOT EXISTS tileset (
-                                     tilescheme text PRIMARY KEY,
-                                     location text,
-                                     downloaded text);
-                                    CREATE TABLE IF NOT EXISTS vrt_subregion (
-                                     region text PRIMARY KEY,
-                                     utm text,
-                                     res_2_vrt text,
-                                     res_2_ovr text,
-                                     res_4_vrt text,
-                                     res_4_ovr text,
-                                     res_8_vrt text,
-                                     res_8_ovr text,
-                                     complete_vrt text,
-                                     complete_ovr text,
-                                     built integer);
-                                    CREATE TABLE IF NOT EXISTS vrt_utm (
-                                     utm text PRIMARY KEY,
-                                     utm_vrt text,
-                                     utm_ovr text,
-                                     built integer);
-                                    CREATE TABLE IF NOT EXISTS tiles (
-                                     tilename text PRIMARY KEY,
-                                     geotiff_link text,
-                                     rat_link text,
-                                     delivered_date text,
-                                     resolution text,
-                                     utm text,
-                                     subregion text,
-                                     geotiff_disk text,
-                                     rat_disk text);"""
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tileset (
+                tilescheme text PRIMARY KEY
+                );
+                """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vrt_subregion (
+                region text PRIMARY KEY
+                );
+                """
+            )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS vrt_utm (
+                utm text PRIMARY KEY
+                );
+                """
+            )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tiles (
+                tilename text PRIMARY KEY
+                );
+                """
+            ) 
             conn.commit()
+            cursor.execute("SELECT name FROM pragma_table_info('tileset')")
+            tileset_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
+            cursor.execute("SELECT name FROM pragma_table_info('vrt_subregion')")
+            vrt_subregion_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
+            cursor.execute("SELECT name FROM pragma_table_info('vrt_utm')")
+            vrt_utm_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
+            cursor.execute("SELECT name FROM pragma_table_info('tiles')")
+            tiles_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
+            for field in tileset_fields:
+                if field not in tileset_existing_fields:
+                    cursor.execute(
+                        f"ALTER TABLE tileset ADD COLUMN {field} {tileset_fields[field]}"
+                    )
+                    conn.commit()
+            for field in vrt_subregion_fields:
+                if field not in vrt_subregion_existing_fields:
+                    cursor.execute(
+                        f"ALTER TABLE vrt_subregion ADD COLUMN {field} {vrt_subregion_fields[field]}"
+                    )
+                    conn.commit()
+            for field in vrt_utm_fields:
+                if field not in vrt_utm_existing_fields:
+                    cursor.execute(
+                        f"ALTER TABLE vrt_utm ADD COLUMN {field} {vrt_utm_fields[field]}"
+                    )
+                    conn.commit()
+            for field in vrt_tiles:
+                if field not in tiles_existing_fields:
+                    cursor.execute(
+                        f"ALTER TABLE tiles ADD COLUMN {field} {vrt_tiles[field]}"
+                    )
+                    conn.commit()
         except sqlite3.Error as e:
             print("Failed to create SQLite tables.")
             raise e
@@ -104,7 +140,11 @@ def connect_to_survey_registry(root: str, target: str) -> sqlite3.Connection:
 
 
 def build_sub_vrts(
-    subregion: str, subregion_tiles: list, root: str, target: str, relative_to_vrt: bool
+    subregion: str,
+    subregion_tiles: list,
+    project_dir: str,
+    data_source: str,
+    relative_to_vrt: bool,
 ) -> dict:
     """
     Build the VRTs of a given subregion.
@@ -115,10 +155,10 @@ def build_sub_vrts(
         subregion name.
     subregion_tiles
         list of tile records belonging to subregion.
-    root
+    project_dir
         destination directory for project.
-    target : str
-        the datasource the script will target e.g. 'BlueTopo' or 'Modeling'.
+    data_source : str
+        the data source for the project e.g. 'BlueTopo' or 'Modeling'.
     relative_to_vrt : bool
         This arg determines if paths of referenced files inside the VRT are relative or absolute paths.
 
@@ -138,8 +178,8 @@ def build_sub_vrts(
         "complete_vrt": None,
         "complete_ovr": None,
     }
-    rel_dir = os.path.join(f"{target}_VRT", subregion["region"])
-    subregion_dir = os.path.join(root, rel_dir)
+    rel_dir = os.path.join(f"{data_source}_VRT", subregion["region"])
+    subregion_dir = os.path.join(project_dir, rel_dir)
     try:
         if os.path.isdir(subregion_dir):
             shutil.rmtree(subregion_dir)
@@ -158,34 +198,34 @@ def build_sub_vrts(
     for res, tiles in resolution_tiles.items():
         print(f"Building {subregion['region']} band {res}...")
         rel_path = os.path.join(rel_dir, subregion["region"] + f"_{res}.vrt")
-        res_vrt = os.path.join(root, rel_path)
-        tiffs = [os.path.join(root, tile["geotiff_disk"]) for tile in tiles]
+        res_vrt = os.path.join(project_dir, rel_path)
+        tiffs = [os.path.join(project_dir, tile["geotiff_disk"]) for tile in tiles]
         # revisit levels
         if "2" in res:
             build_vrt(tiffs, res_vrt, [2, 4], relative_to_vrt)
             vrt_list.append(res_vrt)
             fields["res_2_vrt"] = rel_path
-            if os.path.isfile(os.path.join(root, fields["res_2_vrt"] + ".ovr")):
+            if os.path.isfile(os.path.join(project_dir, fields["res_2_vrt"] + ".ovr")):
                 fields["res_2_ovr"] = rel_path + ".ovr"
         if "4" in res:
             build_vrt(tiffs, res_vrt, [4, 8], relative_to_vrt)
             vrt_list.append(res_vrt)
             fields["res_4_vrt"] = rel_path
-            if os.path.isfile(os.path.join(root, fields["res_4_vrt"] + ".ovr")):
+            if os.path.isfile(os.path.join(project_dir, fields["res_4_vrt"] + ".ovr")):
                 fields["res_4_ovr"] = rel_path + ".ovr"
         if "8" in res:
             build_vrt(tiffs, res_vrt, [8], relative_to_vrt)
             vrt_list.append(res_vrt)
             fields["res_8_vrt"] = rel_path
-            if os.path.isfile(os.path.join(root, fields["res_8_vrt"] + ".ovr")):
+            if os.path.isfile(os.path.join(project_dir, fields["res_8_vrt"] + ".ovr")):
                 fields["res_8_ovr"] = rel_path + ".ovr"
         if "16" in res:
             vrt_list.extend(tiffs)
     rel_path = os.path.join(rel_dir, subregion["region"] + "_complete.vrt")
-    complete_vrt = os.path.join(root, rel_path)
+    complete_vrt = os.path.join(project_dir, rel_path)
     build_vrt(vrt_list, complete_vrt, [16], relative_to_vrt)
     fields["complete_vrt"] = rel_path
-    if os.path.isfile(os.path.join(root, fields["complete_vrt"] + ".ovr")):
+    if os.path.isfile(os.path.join(project_dir, fields["complete_vrt"] + ".ovr")):
         fields["complete_ovr"] = rel_path + ".ovr"
     return fields
 
@@ -245,7 +285,9 @@ def build_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool) -
     vrt = None
 
 
-def add_vrt_rat(conn: sqlite3.Connection, utm: str, root: str, vrt_path: str) -> None:
+def add_vrt_rat(
+    conn: sqlite3.Connection, utm: str, project_dir: str, vrt_path: str
+) -> None:
     """
     Create a raster attribute table for the VRT.
 
@@ -255,7 +297,7 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, root: str, vrt_path: str) ->
         database connection object.
     utm : str
         utm zone of the VRT.
-    root
+    project_dir
         destination directory for project.
     vrt_path
         path to the VRT to which to add the raster attribute table.
@@ -266,10 +308,10 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, root: str, vrt_path: str) ->
     tiles = [dict(row) for row in cursor.fetchall()]
     surveys = []
     for tile in tiles:
-        gtiff = os.path.join(root, tile["geotiff_disk"])
+        gtiff = os.path.join(project_dir, tile["geotiff_disk"])
         if os.path.isfile(gtiff) is False:
             continue
-        rat_file = os.path.join(root, tile["rat_disk"])
+        rat_file = os.path.join(project_dir, tile["rat_disk"])
         if os.path.isfile(rat_file) is False:
             continue
         ds = gdal.Open(gtiff)
@@ -328,14 +370,14 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, root: str, vrt_path: str) ->
 
 
 def select_tiles_by_subregion(
-    root: str, conn: sqlite3.Connection, subregion: str
+    project_dir: str, conn: sqlite3.Connection, subregion: str
 ) -> list:
     """
     Retrieve all tile records with files in the given subregion.
 
     Parameters
     ----------
-    root
+    project_dir
         destination directory for project.
     conn : sqlite3.Connection
         database connection object.
@@ -355,8 +397,8 @@ def select_tiles_by_subregion(
         for tile in tiles
         if tile["geotiff_disk"]
         and tile["rat_disk"]
-        and os.path.isfile(os.path.join(root, tile["geotiff_disk"]))
-        and os.path.isfile(os.path.join(root, tile["rat_disk"]))
+        and os.path.isfile(os.path.join(project_dir, tile["geotiff_disk"]))
+        and os.path.isfile(os.path.join(project_dir, tile["rat_disk"]))
     ]
     if len(tiles) - len(existing_tiles) != 0:
         print(
@@ -368,13 +410,15 @@ def select_tiles_by_subregion(
     return existing_tiles
 
 
-def select_subregions_by_utm(root: str, conn: sqlite3.Connection, utm: str) -> list:
+def select_subregions_by_utm(
+    project_dir: str, conn: sqlite3.Connection, utm: str
+) -> list:
     """
     Retrieve all subregion records with files in the given UTM.
 
     Parameters
     ----------
-    root
+    project_dir
         destination directory for project.
     conn : sqlite3.Connection
         database connection object.
@@ -397,34 +441,37 @@ def select_subregions_by_utm(root: str, conn: sqlite3.Connection, utm: str) -> l
     subregions = [dict(row) for row in cursor.fetchall()]
     for s in subregions:
         if (
-            (s["res_2_vrt"] and not os.path.isfile(os.path.join(root, s["res_2_vrt"])))
+            (
+                s["res_2_vrt"]
+                and not os.path.isfile(os.path.join(project_dir, s["res_2_vrt"]))
+            )
             or (
                 s["res_2_ovr"]
-                and not os.path.isfile(os.path.join(root, s["res_2_ovr"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_2_ovr"]))
             )
             or (
                 s["res_4_vrt"]
-                and not os.path.isfile(os.path.join(root, s["res_4_vrt"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_4_vrt"]))
             )
             or (
                 s["res_4_ovr"]
-                and not os.path.isfile(os.path.join(root, s["res_4_ovr"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_4_ovr"]))
             )
             or (
                 s["res_8_vrt"]
-                and not os.path.isfile(os.path.join(root, s["res_8_vrt"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_8_vrt"]))
             )
             or (
                 s["res_8_ovr"]
-                and not os.path.isfile(os.path.join(root, s["res_8_ovr"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_8_ovr"]))
             )
             or (
                 s["complete_vrt"] is None
-                or not os.path.isfile(os.path.join(root, s["complete_vrt"]))
+                or not os.path.isfile(os.path.join(project_dir, s["complete_vrt"]))
             )
             or (
                 s["complete_ovr"] is None
-                or not os.path.isfile(os.path.join(root, s["complete_ovr"]))
+                or not os.path.isfile(os.path.join(project_dir, s["complete_ovr"]))
             )
         ):
             raise RuntimeError(
@@ -533,14 +580,14 @@ def update_utm(conn: sqlite3.Connection, fields: dict) -> None:
     conn.commit()
 
 
-def missing_subregions(root: str, conn: sqlite3.Connection) -> int:
+def missing_subregions(project_dir: str, conn: sqlite3.Connection) -> int:
     """
     Confirm built subregions's associated VRT and OVR files exists.
     If the files do not exist, then change the subregion record to unbuilt.
 
     Parameters
     ----------
-    root
+    project_dir
         destination directory for project.
     conn : sqlite3.Connection
         database connection object.
@@ -557,34 +604,37 @@ def missing_subregions(root: str, conn: sqlite3.Connection) -> int:
     # todo comparison against tiles table to know res vrts exist where expected
     for s in subregions:
         if (
-            (s["res_2_vrt"] and not os.path.isfile(os.path.join(root, s["res_2_vrt"])))
+            (
+                s["res_2_vrt"]
+                and not os.path.isfile(os.path.join(project_dir, s["res_2_vrt"]))
+            )
             or (
                 s["res_2_ovr"]
-                and not os.path.isfile(os.path.join(root, s["res_2_ovr"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_2_ovr"]))
             )
             or (
                 s["res_4_vrt"]
-                and not os.path.isfile(os.path.join(root, s["res_4_vrt"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_4_vrt"]))
             )
             or (
                 s["res_4_ovr"]
-                and not os.path.isfile(os.path.join(root, s["res_4_ovr"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_4_ovr"]))
             )
             or (
                 s["res_8_vrt"]
-                and not os.path.isfile(os.path.join(root, s["res_8_vrt"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_8_vrt"]))
             )
             or (
                 s["res_8_ovr"]
-                and not os.path.isfile(os.path.join(root, s["res_8_ovr"]))
+                and not os.path.isfile(os.path.join(project_dir, s["res_8_ovr"]))
             )
             or (
                 s["complete_vrt"] is None
-                or not os.path.isfile(os.path.join(root, s["complete_vrt"]))
+                or not os.path.isfile(os.path.join(project_dir, s["complete_vrt"]))
             )
             or (
                 s["complete_ovr"] is None
-                or not os.path.isfile(os.path.join(root, s["complete_ovr"]))
+                or not os.path.isfile(os.path.join(project_dir, s["complete_ovr"]))
             )
         ):
             missing_subregion_count += 1
@@ -620,14 +670,14 @@ def missing_subregions(root: str, conn: sqlite3.Connection) -> int:
     return missing_subregion_count
 
 
-def missing_utms(root: str, conn: sqlite3.Connection) -> int:
+def missing_utms(project_dir: str, conn: sqlite3.Connection) -> int:
     """
     Confirm built utm's associated VRT and OVR files exists.
     If the files do not exist, then change the utm record to unbuilt.
 
     Parameters
     ----------
-    root
+    project_dir
         destination directory for project.
     conn : sqlite3.Connection
         database connection object.
@@ -645,8 +695,8 @@ def missing_utms(root: str, conn: sqlite3.Connection) -> int:
         if (
             utm["utm_vrt"] is None
             or utm["utm_ovr"] is None
-            or os.path.isfile(os.path.join(root, utm["utm_vrt"])) == False
-            or os.path.isfile(os.path.join(root, utm["utm_ovr"])) == False
+            or os.path.isfile(os.path.join(project_dir, utm["utm_vrt"])) == False
+            or os.path.isfile(os.path.join(project_dir, utm["utm_ovr"])) == False
         ):
             missing_utm_count += 1
             cursor.execute(
@@ -663,7 +713,9 @@ def missing_utms(root: str, conn: sqlite3.Connection) -> int:
     return missing_utm_count
 
 
-def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
+def main(
+    project_dir: str, data_source: str = None, relative_to_vrt: bool = True
+) -> None:
     """
     Build a gdal VRT for all available tiles.
     This VRT is a collection of smaller areas described as VRTs.
@@ -674,18 +726,18 @@ def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
 
     Parameters
     ----------
-    root
+    project_dir
         The directory path to use. Will create if it does not currently exist.
         Required argument.
-    target : str
+    data_source : str
         The NBS offers various products to different end-users. Some are available publicly.
-        Use this argument to identify which product you want to target. BlueTopo is the default.
+        Use this argument to identify which product you want. BlueTopo is the default.
     relative_to_vrt : bool
         Use this argument to set paths of referenced files inside the VRT as relative or absolute paths.
 
     """
-    root = os.path.expanduser(root)
-    if os.path.isabs(root) is False:
+    project_dir = os.path.expanduser(project_dir)
+    if os.path.isabs(project_dir) is False:
         print("Please use an absolute path for your project folder.")
         if "windows" not in platform.system().lower():
             print("Typically for non windows systems this means starting with '/'")
@@ -700,19 +752,21 @@ def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
             "encounter issues in your conda environment."
         )
 
-    if target is None or target.lower() == "bluetopo":
-        target = "BlueTopo"
+    if data_source is None or data_source.lower() == "bluetopo":
+        data_source = "BlueTopo"
 
-    elif target.lower() == "modeling":
-        target = "Modeling"
+    elif data_source.lower() == "modeling":
+        data_source = "Modeling"
 
     else:
-        raise ValueError(f"Invalid target data: {target}")
+        raise ValueError(f"Invalid data source: {data_source}")
 
-    if not os.path.isdir(root):
-        raise ValueError(f"Folder path not found: {root}")
+    if not os.path.isdir(project_dir):
+        raise ValueError(f"Folder path not found: {project_dir}")
 
-    if not os.path.isfile(os.path.join(root, f"{target.lower()}_registry.db")):
+    if not os.path.isfile(
+        os.path.join(project_dir, f"{data_source.lower()}_registry.db")
+    ):
         raise ValueError(
             f"SQLite database not found. Confirm correct folder. "
             "Note: fetch_tiles must be run at least once prior "
@@ -720,11 +774,13 @@ def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
         )
 
     start = datetime.datetime.now()
-    print(f"{target}: Beginning work in path: {root}")
-    conn = connect_to_survey_registry(root, target)
+    print(
+        f"[{start.strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Beginning work in project folder: {project_dir}\n"
+    )
+    conn = connect_to_survey_registry(project_dir, data_source)
 
     # subregions missing files
-    missing_subregion_count = missing_subregions(root, conn)
+    missing_subregion_count = missing_subregions(project_dir, conn)
     if missing_subregion_count:
         print(
             f"{missing_subregion_count} subregion vrts files missing. "
@@ -739,10 +795,12 @@ def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
             "take minutes or hours depending on the amount of tiles."
         )
         for ub_sr in unbuilt_subregions:
-            sr_tiles = select_tiles_by_subregion(root, conn, ub_sr["region"])
+            sr_tiles = select_tiles_by_subregion(project_dir, conn, ub_sr["region"])
             if len(sr_tiles) < 1:
                 continue
-            fields = build_sub_vrts(ub_sr, sr_tiles, root, target, relative_to_vrt)
+            fields = build_sub_vrts(
+                ub_sr, sr_tiles, project_dir, data_source, relative_to_vrt
+            )
             update_subregion(conn, fields)
     else:
         print(
@@ -751,7 +809,7 @@ def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
         )
 
     # utms missing files
-    missing_utm_count = missing_utms(root, conn)
+    missing_utm_count = missing_utms(project_dir, conn)
     if missing_utm_count:
         print(f"{missing_utm_count} utm vrts files missing. Added to build list.")
 
@@ -763,22 +821,23 @@ def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
             "or hours depending on the amount of tiles."
         )
         for ub_utm in unbuilt_utms:
-            subregions = select_subregions_by_utm(root, conn, ub_utm["utm"])
+            utm_start = datetime.datetime.now()
+            subregions = select_subregions_by_utm(project_dir, conn, ub_utm["utm"])
             vrt_list = [
-                os.path.join(root, subregion["complete_vrt"])
+                os.path.join(project_dir, subregion["complete_vrt"])
                 for subregion in subregions
             ]
             if len(vrt_list) < 1:
                 continue
             rel_path = os.path.join(
-                f"{target}_VRT", f"{target}_Fetched_UTM{ub_utm['utm']}.vrt"
+                f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}.vrt"
             )
-            utm_vrt = os.path.join(root, rel_path)
+            utm_vrt = os.path.join(project_dir, rel_path)
             print(f"Building utm{ub_utm['utm']}...")
             build_vrt(vrt_list, utm_vrt, [32, 64], relative_to_vrt)
-            add_vrt_rat(conn, ub_utm["utm"], root, utm_vrt)
+            add_vrt_rat(conn, ub_utm["utm"], project_dir, utm_vrt)
             fields = {"utm_vrt": rel_path, "utm_ovr": None, "utm": ub_utm["utm"]}
-            if os.path.isfile(os.path.join(root, rel_path + ".ovr")):
+            if os.path.isfile(os.path.join(project_dir, rel_path + ".ovr")):
                 fields["utm_ovr"] = rel_path + ".ovr"
             else:
                 raise RuntimeError(
@@ -787,12 +846,14 @@ def main(root: str, target: str = None, relative_to_vrt: bool = True) -> None:
                     "If error persists, please contact NBS."
                 )
             update_utm(conn, fields)
+            print(f"utm{ub_utm['utm']} complete after {datetime.datetime.now() - utm_start}")
     else:
         print(
             "UTM vrt(s) appear up to date with the most recently "
-            f"fetched tiles.\nNote: deleting the {target}_VRT folder will "
+            f"fetched tiles.\nNote: deleting the {data_source}_VRT folder will "
             "allow you to recreate from scratch if necessary"
         )
 
-    total_time = datetime.datetime.now() - start
-    print(f"Operation complete. Elapsed time: {total_time}")
+    print(
+        f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Operation complete after {datetime.datetime.now() - start}"
+    )
