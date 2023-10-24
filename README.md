@@ -13,15 +13,16 @@
 </p>
 
 ## Overview
+
 This project simplifies getting BlueTopo data in your area of interest.
 
 ## Background
 
 [BlueTopo](https://www.nauticalcharts.noaa.gov/data/bluetopo.html) is a compilation of the best available public bathymetric data of U.S. waters.
 
-Created by [NOAA Office of Coast Survey's](https://www.nauticalcharts.noaa.gov/) National Bathymetric Source project, [BlueTopo data](https://www.nauticalcharts.noaa.gov/data/bluetopo_specs.html) intends to provide depth information nationwide with the vertical uncertainty tied to that depth estimate as well as information on the survey source that it originated from. 
+Created by [NOAA Office of Coast Survey's](https://www.nauticalcharts.noaa.gov/) National Bathymetric Source project, [BlueTopo data](https://www.nauticalcharts.noaa.gov/data/bluetopo_specs.html) intends to provide depth information nationwide with the vertical uncertainty tied to that depth estimate as well as information on the survey source that it originated from.
 
-This data is presented in a multiband high resolution GeoTIFF with an associated raster attribute table. 
+This data is presented in a multiband high resolution GeoTIFF with an associated raster attribute table.
 
 For answers to frequently asked questions, visit the [FAQ](https://www.nauticalcharts.noaa.gov/data/bluetopo_faq.html).
 
@@ -30,43 +31,46 @@ For answers to frequently asked questions, visit the [FAQ](https://www.nauticalc
 This codebase is written for Python 3 and relies on the following python
 packages:
 
--   gdal / ogr
--   numpy
--   boto3
+- gdal / ogr
+- numpy
+- boto3
 
 ## Installation
 
-Download and install conda (If you have not already): [conda installation](https://docs.conda.io/projects/conda/en/latest/user-guide/install/)
-
-Download and install git (If you have not already): [git installation](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+Install conda (If you have not already): [conda installation](https://docs.conda.io/projects/conda/en/latest/user-guide/install/)
 
 In the command line, create an environment with the required packages:
 
 ```
 conda create -n bluetopo_env -c conda-forge 'gdal>=3.4'
 ```
+
 ```
 conda activate bluetopo_env
 ```
+
 ```
-pip install git+https://github.com/noaa-ocs-hydrography/BlueTopo
+pip install bluetopo
 ```
 
 ## Quickstart
 
-To download the desired files, first create a geometry file (such as a geopackage) with a polygon depicting the area of interest.  Then run the following commands inside of a Python shell:
+To download the desired files, first create a geometry file (such as a geopackage) with a polygon depicting the area of interest. Then run the following commands inside of a Python shell:
 
 ```python
 from nbs.bluetopo import fetch_tiles
 ```
+
 ```python
 fetch_tiles.main(r'C:\download_path', 'area_of_interest.gpkg')
 ```
 
 To build a GDAL VRT of the downloaded tiles:
+
 ```python
 from nbs.bluetopo import build_vrt
 ```
+
 ```python
 build_vrt.main(r'C:\download_path')
 ```
@@ -76,13 +80,17 @@ build_vrt.main(r'C:\download_path')
 You can also use the command line. Confirm the environment we created during installation is activated.
 
 To fetch the latest BlueTopo data, use `fetch_tiles` passing a directory path and a geometry file path with a polygon depicting your area of interest:
+
 ```
 fetch_tiles -d [DIRECTORY PATH] -g [GEOMETRY FILE PATH]
 ```
+
 Pass the same directory path to `build_vrt` to create a VRT from the fetched data:
+
 ```
 build_vrt -d [DIRECTORY PATH]
 ```
+
 Use `-h` for help and to see additional arguments.
 
 For most usecases, reusing the commands above to stay up to date in your area of interest is adequate.
@@ -94,9 +102,9 @@ primary difference between the two is the vertical datum. Modeling data is on a 
 
 ## Authors
 
--   Glen Rice (NOAA), <ocs.nbs@noaa.gov>
+- Glen Rice (NOAA), <ocs.nbs@noaa.gov>
 
--   Tashi Geleg (Lynker / NOAA), <ocs.nbs@noaa.gov>
+- Tashi Geleg (Lynker / NOAA), <ocs.nbs@noaa.gov>
 
 ## License
 
