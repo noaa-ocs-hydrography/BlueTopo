@@ -34,6 +34,7 @@ packages:
 - gdal / ogr
 - numpy
 - boto3
+- tqdm
 
 ## Installation
 
