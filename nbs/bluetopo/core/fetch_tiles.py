@@ -25,7 +25,7 @@ from botocore.client import Config
 from osgeo import gdal, ogr, osr
 from tqdm import tqdm
 
-from nbs.bluetopo.build_vrt import connect_to_survey_registry
+from nbs.bluetopo.core.build_vrt import connect_to_survey_registry
 
 debug_info = f"""
 Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}
