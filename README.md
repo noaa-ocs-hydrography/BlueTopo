@@ -97,7 +97,7 @@ For most usecases, reusing the commands above to stay up to date in your area of
 
 ## Notes
 
-In addition to BlueTopo, modeling data is available. You can work with modeling data using the source argument in the CLI commands or the data_source argument if you're calling the function directly.
+In addition to BlueTopo, modeling data is available. You can work with modeling data using the `source` argument in the CLI commands or the `data_source` argument if you're calling the function directly.
 
 The primary difference between BlueTopo and modeling data is the vertical datum. Modeling data is on a low water datum.
 
