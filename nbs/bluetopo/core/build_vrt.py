@@ -202,19 +202,19 @@ def build_sub_vrts(
         tiffs = [os.path.join(project_dir, tile["geotiff_disk"]) for tile in tiles]
         # revisit levels
         if "2" in res:
-            build_vrt(tiffs, res_vrt, [2, 4], relative_to_vrt)
+            create_vrt(tiffs, res_vrt, [2, 4], relative_to_vrt)
             vrt_list.append(res_vrt)
             fields["res_2_vrt"] = rel_path
             if os.path.isfile(os.path.join(project_dir, fields["res_2_vrt"] + ".ovr")):
                 fields["res_2_ovr"] = rel_path + ".ovr"
         if "4" in res:
-            build_vrt(tiffs, res_vrt, [4, 8], relative_to_vrt)
+            create_vrt(tiffs, res_vrt, [4, 8], relative_to_vrt)
             vrt_list.append(res_vrt)
             fields["res_4_vrt"] = rel_path
             if os.path.isfile(os.path.join(project_dir, fields["res_4_vrt"] + ".ovr")):
                 fields["res_4_ovr"] = rel_path + ".ovr"
         if "8" in res:
-            build_vrt(tiffs, res_vrt, [8], relative_to_vrt)
+            create_vrt(tiffs, res_vrt, [8], relative_to_vrt)
             vrt_list.append(res_vrt)
             fields["res_8_vrt"] = rel_path
             if os.path.isfile(os.path.join(project_dir, fields["res_8_vrt"] + ".ovr")):
@@ -223,14 +223,14 @@ def build_sub_vrts(
             vrt_list.extend(tiffs)
     rel_path = os.path.join(rel_dir, subregion["region"] + "_complete.vrt")
     complete_vrt = os.path.join(project_dir, rel_path)
-    build_vrt(vrt_list, complete_vrt, [16], relative_to_vrt)
+    create_vrt(vrt_list, complete_vrt, [16], relative_to_vrt)
     fields["complete_vrt"] = rel_path
     if os.path.isfile(os.path.join(project_dir, fields["complete_vrt"] + ".ovr")):
         fields["complete_ovr"] = rel_path + ".ovr"
     return fields
 
 
-def build_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool) -> None:
+def create_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool) -> None:
     """
     Build VRT from files.
 
@@ -834,7 +834,7 @@ def main(
             )
             utm_vrt = os.path.join(project_dir, rel_path)
             print(f"Building utm{ub_utm['utm']}...")
-            build_vrt(vrt_list, utm_vrt, [32, 64], relative_to_vrt)
+            create_vrt(vrt_list, utm_vrt, [32, 64], relative_to_vrt)
             add_vrt_rat(conn, ub_utm["utm"], project_dir, utm_vrt)
             fields = {"utm_vrt": rel_path, "utm_ovr": None, "utm": ub_utm["utm"]}
             if os.path.isfile(os.path.join(project_dir, rel_path + ".ovr")):

@@ -1,8 +1,8 @@
 import argparse
 from argparse import ArgumentParser
 
-from nbs.bluetopo.build_vrt import main as vrt
-from nbs.bluetopo.fetch_tiles import main as fetch
+from nbs.bluetopo.core.build_vrt import main as build_vrt
+from nbs.bluetopo.core.fetch_tiles import main as fetch_tiles
 
 
 def str_to_bool(relative_to_vrt):
@@ -63,7 +63,7 @@ def build_vrt_command():
         type=str_to_bool,
     )
     args = parser.parse_args()
-    vrt(
+    build_vrt(
         project_dir=args.dir,
         data_source=args.source,
         relative_to_vrt=args.relative_to_vrt,
@@ -127,7 +127,7 @@ def fetch_tiles_command():
         action="store_true",
     )
     args = parser.parse_args()
-    fetch(
+    fetch_tiles(
         project_dir=args.dir,
         desired_area_filename=args.geom,
         untrack_missing=args.untrack,

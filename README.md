@@ -62,7 +62,7 @@ from nbs.bluetopo import fetch_tiles
 ```
 
 ```python
-fetch_tiles.main(r'C:\download_path', 'area_of_interest.gpkg')
+fetch_tiles(r'C:\download_path', 'area_of_interest.gpkg')
 ```
 
 To build a GDAL VRT of the downloaded tiles:
@@ -72,7 +72,7 @@ from nbs.bluetopo import build_vrt
 ```
 
 ```python
-build_vrt.main(r'C:\download_path')
+build_vrt(r'C:\download_path')
 ```
 
 ## CLI
