@@ -26,8 +26,7 @@ def build_vrt_command():
         "-d",
         "--dir",
         "--directory",
-        help="The directory path to use. "
-        "Will create if it does not currently exist. Required argument.",
+        help="The directory path to use. " "Will create if it does not currently exist. Required argument.",
         type=str,
         nargs="?",
         dest="dir",
@@ -36,13 +35,7 @@ def build_vrt_command():
     parser.add_argument(
         "-s",
         "--source",
-        help=(
-            "The NBS offers various products to different end-users. "
-            "Some are available publicly. Use this argument to identify "
-            "the data source. BlueTopo is the default."
-        ),
-        type=str.lower,
-        choices=["bluetopo", "modeling"],
+        help=("The NBS offers various products to different end-users. " "Some are available publicly. Use this argument to identify " "the data source. BlueTopo is the default."),
         default="bluetopo",
         dest="source",
         nargs="?",
@@ -51,11 +44,7 @@ def build_vrt_command():
         "-r",
         "--rel",
         "--relative_to_vrt",
-        help=(
-            "This bool argument will determine whether files referenced in the VRT "
-            "are relative or absolute. The default value is true setting all paths "
-            "inside the VRT to relative."
-        ),
+        help=("This bool argument will determine whether files referenced in the VRT " "are relative or absolute. The default value is true setting all paths " "inside the VRT to relative."),
         nargs="?",
         dest="relative_to_vrt",
         default="true",
@@ -80,8 +69,7 @@ def fetch_tiles_command():
         "-d",
         "--dir",
         "--directory",
-        help="The directory path to use. "
-        "Will create if it does not currently exist. Required argument.",
+        help="The directory path to use. " "Will create if it does not currently exist. Required argument.",
         type=str,
         nargs="?",
         dest="dir",
@@ -91,13 +79,7 @@ def fetch_tiles_command():
         "-g",
         "--geom",
         "--geometry",
-        help=(
-            "The geometry file to use to find intersecting available tiles. "
-            "The returned tile ids at the time of intersection will be added to "
-            "tracking. fetch_tiles will stay up to date with the latest data "
-            "available from the NBS for all tracked tiles. This argument is "
-            "not necessary if you do not want to add new tile ids to tracking."
-        ),
+        help=("The geometry file to use to find intersecting available tiles. " "The returned tile ids at the time of intersection will be added to " "tracking. fetch_tiles will stay up to date with the latest data " "available from the NBS for all tracked tiles. This argument is " "not necessary if you do not want to add new tile ids to tracking."),
         type=str,
         dest="geom",
         nargs="?",
@@ -105,13 +87,7 @@ def fetch_tiles_command():
     parser.add_argument(
         "-s",
         "--source",
-        help=(
-            "The NBS offers various products to different end-users. "
-            "Some are available publicly. Use this argument to identify "
-            "the data source. BlueTopo is the default."
-        ),
-        type=str.lower,
-        choices=["bluetopo", "modeling"],
+        help=("The NBS offers various products to different end-users. " "Some are available publicly. Use this argument to identify " "the data source. BlueTopo is the default."),
         default="bluetopo",
         dest="source",
         nargs="?",
@@ -119,10 +95,7 @@ def fetch_tiles_command():
     parser.add_argument(
         "-u",
         "--untrack",
-        help=(
-            "This flag will untrack tiles that have missing files in your local "
-            "download directory. fetch_tiles will no longer retrieve these tiles."
-        ),
+        help=("This flag will untrack tiles that have missing files in your local " "download directory. fetch_tiles will no longer retrieve these tiles."),
         dest="untrack",
         action="store_true",
     )

@@ -15,6 +15,7 @@ import hashlib
 import os
 import platform
 import random
+import shutil
 import sqlite3
 import sys
 
@@ -70,44 +71,53 @@ def get_tessellation(
             os.remove(os.path.join(project_dir, tilescheme["location"]))
         except (OSError, PermissionError):
             continue
-    cred = {
-        "aws_access_key_id": "",
-        "aws_secret_access_key": "",
-        "config": Config(signature_version=UNSIGNED),
-    }
-    client = boto3.client("s3", **cred)
-    pageinator = client.get_paginator("list_objects_v2")
-    objs = pageinator.paginate(Bucket=bucket, Prefix=prefix).build_full_result()
-    if "Contents" not in objs:
-        print(
-            f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: No geometry found in {prefix}"
-        )
-        return None
-    tileschemes = objs["Contents"]
-    tileschemes.sort(key=lambda x: x["LastModified"], reverse=True)
-    source_name = tileschemes[0]["Key"]
-    filename = os.path.basename(source_name)
-    relative = os.path.join(data_source, f"Tessellation", filename)
-    if len(tileschemes) > 1:
-        print(
-            f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: More than one geometry found in {prefix}, using {filename}"
-        )
-    destination_name = os.path.join(project_dir, relative)
-    if not os.path.exists(os.path.dirname(destination_name)):
-        os.makedirs(os.path.dirname(destination_name))
-    try:
-        client.download_file(bucket, source_name, destination_name)
-    except (OSError, PermissionError) as e:
-        print(
-            f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: "
-            "Failed to download tile scheme "
-            "possibly due to conflict with an open existing file. "
-            "Please close all files and attempt again"
-        )
-        sys.exit(1)
-    print(
-        f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename}"
-    )
+    if data_source != "BlueTopo" and data_source != "Modeling":
+        gpkg_files = os.listdir(prefix)
+        gpkg_files = [file for file in gpkg_files if file.endswith(".gpkg") and "Tile_Scheme" in file]
+        if len(gpkg_files) == 0:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: No geometry found in {prefix}")
+            return None
+        gpkg_files.sort(reverse=True)
+        filename = gpkg_files[0]
+        if len(gpkg_files) > 1:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: More than one geometry found in {prefix}, using {gpkg_files[0]}")
+        destination_name = os.path.join(project_dir, data_source, f"Tessellation", gpkg_files[0])
+        if not os.path.exists(os.path.dirname(destination_name)):
+            os.makedirs(os.path.dirname(destination_name))
+        try:
+            shutil.copy(os.path.join(prefix, gpkg_files[0]), destination_name)
+            relative = os.path.join(data_source, f"Tessellation", gpkg_files[0])
+        except:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: " "Failed to download tile scheme " "possibly due to conflict with an open existing file. " "Please close all files and attempt again")
+            sys.exit(1)
+    else:
+        cred = {
+            "aws_access_key_id": "",
+            "aws_secret_access_key": "",
+            "config": Config(signature_version=UNSIGNED),
+        }
+        client = boto3.client("s3", **cred)
+        pageinator = client.get_paginator("list_objects_v2")
+        objs = pageinator.paginate(Bucket=bucket, Prefix=prefix).build_full_result()
+        if "Contents" not in objs:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: No geometry found in {prefix}")
+            return None
+        tileschemes = objs["Contents"]
+        tileschemes.sort(key=lambda x: x["LastModified"], reverse=True)
+        source_name = tileschemes[0]["Key"]
+        filename = os.path.basename(source_name)
+        relative = os.path.join(data_source, f"Tessellation", filename)
+        if len(tileschemes) > 1:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: More than one geometry found in {prefix}, using {filename}")
+        destination_name = os.path.join(project_dir, relative)
+        if not os.path.exists(os.path.dirname(destination_name)):
+            os.makedirs(os.path.dirname(destination_name))
+        try:
+            client.download_file(bucket, source_name, destination_name)
+        except (OSError, PermissionError) as e:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: " "Failed to download tile scheme " "possibly due to conflict with an open existing file. " "Please close all files and attempt again")
+            sys.exit(1)
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename}")
     cursor.execute(
         """REPLACE INTO tileset(tilescheme, location, downloaded)
                       VALUES(?, ?, ?)""",
@@ -152,19 +162,16 @@ def download_tiles(
     download_tile_list = all_db_tiles(conn)
     # better tqdm download time estimate?
     random.shuffle(download_tile_list)
-    new_tile_list = [
-        download_tile
-        for download_tile in download_tile_list
-        if download_tile["geotiff_disk"] is None or download_tile["rat_disk"] is None
-    ]
-    cred = {
-        "aws_access_key_id": "",
-        "aws_secret_access_key": "",
-        "config": Config(signature_version=UNSIGNED),
-    }
+    new_tile_list = [download_tile for download_tile in download_tile_list if download_tile["geotiff_disk"] is None or download_tile["rat_disk"] is None]
     print("\nResolving fetch list...")
-    client = boto3.client("s3", **cred)
-    pageinator = client.get_paginator("list_objects_v2")
+    if tile_prefix != "Local":
+        cred = {
+            "aws_access_key_id": "",
+            "aws_secret_access_key": "",
+            "config": Config(signature_version=UNSIGNED),
+        }
+        client = boto3.client("s3", **cred)
+        pageinator = client.get_paginator("list_objects_v2")
     existing_tiles = []
     missing_tiles = []
     tiles_found = []
@@ -172,56 +179,74 @@ def download_tiles(
     download_dict = {}
     for fields in download_tile_list:
         if fields["geotiff_disk"] and fields["rat_disk"]:
-            if os.path.isfile(
-                os.path.join(project_dir, fields["geotiff_disk"])
-            ) and os.path.isfile(os.path.join(project_dir, fields["rat_disk"])):
+            if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) and os.path.isfile(os.path.join(project_dir, fields["rat_disk"])):
                 if fields["geotiff_verified"] != "True" or fields["rat_verified"] != "True":
                     missing_tiles.append(fields["tilename"])
                 else:
                     existing_tiles.append(fields["tilename"])
                     continue
-            if (
-                os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"]))
-                is False
-                or os.path.isfile(os.path.join(project_dir, fields["rat_disk"]))
-                is False
-            ):
+            if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) is False or os.path.isfile(os.path.join(project_dir, fields["rat_disk"])) is False:
                 missing_tiles.append(fields["tilename"])
-
-        tilename = fields["tilename"]
-        pfx = tile_prefix + f"/{tilename}/"
-        objs = pageinator.paginate(Bucket=bucket, Prefix=pfx).build_full_result()
-        if len(objs) > 0:
-            download_dict[tilename] = {
-                "tile": tilename,
-                "bucket": bucket,
-                "client": client,
-                "subregion": fields["subregion"],
-                "utm": fields["utm"],
-            }
-            for object_name in objs["Contents"]:
-                source_name = object_name["Key"]
-                relative = os.path.join(
-                    data_source, f"UTM{fields['utm']}", os.path.basename(source_name)
-                )
-                destination_name = os.path.join(project_dir, relative)
-                if not os.path.exists(os.path.dirname(destination_name)):
-                    os.makedirs(os.path.dirname(destination_name))
-                if ".aux" in source_name.lower():
-                    download_dict[tilename]["rat"] = source_name
-                    download_dict[tilename]["rat_dest"] = destination_name
-                    download_dict[tilename]["rat_verified"] = fields["rat_verified"]
-                    download_dict[tilename]["rat_disk"] = relative 
-                    download_dict[tilename]["rat_sha256_checksum"] = fields["rat_sha256_checksum"] 
-                else:
-                    download_dict[tilename]["geotiff"] = source_name
-                    download_dict[tilename]["geotiff_dest"] = destination_name
-                    download_dict[tilename]["geotiff_verified"] = fields["geotiff_verified"]
-                    download_dict[tilename]["geotiff_disk"] = relative
-                    download_dict[tilename]["geotiff_sha256_checksum"] = fields["geotiff_sha256_checksum"] 
-            tiles_found.append(tilename)
+        if "BlueTopo" in tile_prefix or "Modeling" in tile_prefix:
+            tilename = fields["tilename"]
+            pfx = tile_prefix + f"/{tilename}/"
+            objs = pageinator.paginate(Bucket=bucket, Prefix=pfx).build_full_result()
+            if len(objs) > 0:
+                download_dict[tilename] = {
+                    "tile": tilename,
+                    "bucket": bucket,
+                    "client": client,
+                    "subregion": fields["subregion"],
+                    "utm": fields["utm"],
+                }
+                for object_name in objs["Contents"]:
+                    source_name = object_name["Key"]
+                    relative = os.path.join(data_source, f"UTM{fields['utm']}", os.path.basename(source_name))
+                    destination_name = os.path.join(project_dir, relative)
+                    if not os.path.exists(os.path.dirname(destination_name)):
+                        os.makedirs(os.path.dirname(destination_name))
+                    if ".aux" in source_name.lower():
+                        download_dict[tilename]["rat"] = source_name
+                        download_dict[tilename]["rat_dest"] = destination_name
+                        download_dict[tilename]["rat_verified"] = fields["rat_verified"]
+                        download_dict[tilename]["rat_disk"] = relative
+                        download_dict[tilename]["rat_sha256_checksum"] = fields["rat_sha256_checksum"]
+                    else:
+                        download_dict[tilename]["geotiff"] = source_name
+                        download_dict[tilename]["geotiff_dest"] = destination_name
+                        download_dict[tilename]["geotiff_verified"] = fields["geotiff_verified"]
+                        download_dict[tilename]["geotiff_disk"] = relative
+                        download_dict[tilename]["geotiff_sha256_checksum"] = fields["geotiff_sha256_checksum"]
+                tiles_found.append(tilename)
+            else:
+                tiles_not_found.append(tilename)
+        # refactor later
+        elif tile_prefix == "Local":
+            tilename = fields["tilename"]
+            if fields["geotiff_link"] and fields["rat_link"]:
+                download_dict[tilename] = {
+                    "tile": tilename,
+                    "subregion": fields["subregion"],
+                    "client": "Local",
+                    "utm": fields["utm"],
+                }
+                download_dict[tilename]["rat"] = fields["rat_link"]
+                download_dict[tilename]["rat_disk"] = os.path.join(data_source, f"UTM{fields['utm']}", os.path.basename(fields["rat_link"]))
+                download_dict[tilename]["rat_dest"] = os.path.join(project_dir, download_dict[tilename]["rat_disk"])
+                download_dict[tilename]["rat_verified"] = fields["rat_verified"]
+                download_dict[tilename]["rat_sha256_checksum"] = fields["rat_sha256_checksum"]
+                download_dict[tilename]["geotiff"] = fields["geotiff_link"]
+                download_dict[tilename]["geotiff_disk"] = os.path.join(data_source, f"UTM{fields['utm']}", os.path.basename(fields["geotiff_link"]))
+                download_dict[tilename]["geotiff_dest"] = os.path.join(project_dir, download_dict[tilename]["geotiff_disk"])
+                download_dict[tilename]["geotiff_verified"] = fields["geotiff_verified"]
+                download_dict[tilename]["geotiff_sha256_checksum"] = fields["geotiff_sha256_checksum"]
+                if not os.path.exists(os.path.dirname(download_dict[tilename]["geotiff_dest"])):
+                    os.makedirs(os.path.dirname(download_dict[tilename]["geotiff_dest"]))
+                tiles_found.append(tilename)
+            else:
+                tiles_not_found.append(tilename)
         else:
-            tiles_not_found.append(tilename)
+            raise ValueError(f"Invalid tile prefix: {tile_prefix}")
 
     def pull(downloads: dict) -> dict:
         """
@@ -229,7 +254,7 @@ def download_tiles(
 
         Parameters
         ----------
-        downloads : dict 
+        downloads : dict
             dict holding necessary values to execute download and checksum verification.
 
         Returns
@@ -238,14 +263,18 @@ def download_tiles(
             result of download attempt.
         """
         try:
-            downloads["client"].download_file(downloads["bucket"], downloads["geotiff"], downloads["geotiff_dest"])
-            downloads["client"].download_file(downloads["bucket"], downloads["rat"], downloads["rat_dest"])
+            if downloads["client"] == "Local":
+                shutil.copy(downloads["geotiff"], downloads["geotiff_dest"])
+                shutil.copy(downloads["rat"], downloads["rat_dest"])
+            else:
+                downloads["client"].download_file(downloads["bucket"], downloads["geotiff"], downloads["geotiff_dest"])
+                downloads["client"].download_file(downloads["bucket"], downloads["rat"], downloads["rat_dest"])
             if os.path.isfile(downloads["geotiff_dest"]) is False or os.path.isfile(downloads["rat_dest"]) is False:
                 return {"Tile": downloads["tile"], "Result": False, "Reason": "missing download"}
-            geotiff_hash = hashlib.sha256(open(downloads["geotiff_dest"], "rb").read()).hexdigest() 
-            rat_hash = hashlib.sha256(open(downloads["rat_dest"], "rb").read()).hexdigest() 
+            geotiff_hash = hashlib.sha256(open(downloads["geotiff_dest"], "rb").read()).hexdigest()
+            rat_hash = hashlib.sha256(open(downloads["rat_dest"], "rb").read()).hexdigest()
             if downloads["geotiff_sha256_checksum"] != geotiff_hash or downloads["rat_sha256_checksum"] != rat_hash:
-                return {"Tile": downloads["tile"], "Result": False, "Reason": "incorrect hash"} 
+                return {"Tile": downloads["tile"], "Result": False, "Reason": "incorrect hash"}
         except Exception as e:
             return {"Tile": downloads["tile"], "Result": False, "Reason": "exception"}
         return {"Tile": downloads["tile"], "Result": True, "Reason": "success"}
@@ -258,28 +287,19 @@ def download_tiles(
         print(f"\nFetching {download_length} tiles")
         with tqdm(
             total=download_length,
-            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} Tiles {elapsed}, {remaining} Est. Time Remaining"
-            "{postfix}",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} Tiles {elapsed}, {remaining} Est. Time Remaining" "{postfix}",
             desc=f"{data_source} Fetch",
             colour="#0085CA",
             position=0,
             leave=True,
         ) as progress:
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=os.cpu_count() - 1
-            ) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() - 1) as executor:
                 for i in executor.map(pull, download_dict.values()):
                     results.append(i)
                     progress.update(1)
-    successful_downloads = [
-        download["Tile"] for download in results if download["Result"] == True
-    ]
-    failed_downloads = [
-        download["Tile"] for download in results if download["Result"] == False
-    ]
-    failed_verifications = [
-        download["Tile"] for download in results if 
-        (download["Result"] == False and download["Reason"] == "incorrect hash")]
+    successful_downloads = [download["Tile"] for download in results if download["Result"] == True]
+    failed_downloads = [download["Tile"] for download in results if download["Result"] == False]
+    failed_verifications = [download["Tile"] for download in results if (download["Result"] == False and download["Reason"] == "incorrect hash")]
 
     if len(successful_downloads) > 0:
         update_records(conn, download_dict, successful_downloads)
@@ -348,9 +368,7 @@ def get_tile_list(desired_area_filename: str, tile_scheme_filename: str) -> [str
     return feature_list
 
 
-def transform_layer(
-    input_layer: ogr.Layer, desired_crs: osr.SpatialReference
-) -> ogr.DataSource:
+def transform_layer(input_layer: ogr.Layer, desired_crs: osr.SpatialReference) -> ogr.DataSource:
     """
     Transform a provided ogr layer to the provided coordinate reference system.
 
@@ -400,48 +418,41 @@ def update_records(conn: sqlite3.Connection, download_dict: dict, successful_dow
     # TODO refactor more sensibly
     tiles_records = []
     subregion_records = []
-    utm_records = [] 
+    utm_records = []
     for tilename in download_dict:
         if tilename in successful_downloads:
-            tiles_records.append((
-                            download_dict[tilename]["geotiff_disk"],
-                            download_dict[tilename]["rat_disk"],
-                            "True",
-                            "True",
-                            tilename
-            ))
-            subregion_records.append((
-                            download_dict[tilename]["subregion"],
-                            download_dict[tilename]["utm"],
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            0,
-            ))
-            utm_records.append((
-                            download_dict[tilename]["utm"],
-                            None, 
-                            None, 
-                            0
-            ))
+            tiles_records.append((download_dict[tilename]["geotiff_disk"], download_dict[tilename]["rat_disk"], "True", "True", tilename))
+            subregion_records.append(
+                (
+                    download_dict[tilename]["subregion"],
+                    download_dict[tilename]["utm"],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    0,
+                )
+            )
+            utm_records.append((download_dict[tilename]["utm"], None, None, 0))
     if len(tiles_records) == 0:
         return
     cursor = conn.cursor()
     cursor.execute("BEGIN TRANSACTION;")
-    cursor.executemany("""
+    cursor.executemany(
+        """
                         UPDATE tiles
                         SET geotiff_disk = ?, rat_disk = ?,
                         geotiff_verified = ?, rat_verified = ?
                         WHERE tilename = ?
                         """,
-                        tiles_records 
+        tiles_records,
     )
-    cursor.executemany("""
+    cursor.executemany(
+        """
                         INSERT INTO vrt_subregion(region, utm, res_2_vrt,
                         res_2_ovr, res_4_vrt, res_4_ovr, res_8_vrt, res_8_ovr,
                         complete_vrt, complete_ovr, built)
@@ -458,9 +469,10 @@ def update_records(conn: sqlite3.Connection, download_dict: dict, successful_dow
                         complete_ovr = EXCLUDED.complete_ovr,
                         built = EXCLUDED.built
                         """,
-                        subregion_records
+        subregion_records,
     )
-    cursor.executemany("""
+    cursor.executemany(
+        """
                         INSERT INTO vrt_utm(utm, utm_vrt, utm_ovr, built)
                         VALUES(?, ?, ?, ?)
                         ON CONFLICT(utm) DO UPDATE
@@ -468,7 +480,7 @@ def update_records(conn: sqlite3.Connection, download_dict: dict, successful_dow
                         utm_ovr = EXCLUDED.utm_ovr,
                         built = EXCLUDED.built
                         """,
-                        utm_records,
+        utm_records,
     )
     cursor.execute("COMMIT;")
     conn.commit()
@@ -491,11 +503,7 @@ def insert_new(conn: sqlite3.Connection, tiles: list) -> int:
         amount of delivered tiles from input tiles.
     """
     cursor = conn.cursor()
-    tile_list = [
-        (tile["tile"],)
-        for tile in tiles
-        if tile["Delivered_Date"] and tile["GeoTIFF_Link"] and tile["RAT_Link"]
-    ]
+    tile_list = [(tile["tile"],) for tile in tiles if tile["Delivered_Date"] and tile["GeoTIFF_Link"] and tile["RAT_Link"]]
     cursor.executemany(
         """INSERT INTO tiles(tilename)
                           VALUES(?) ON CONFLICT DO NOTHING""",
@@ -560,60 +568,32 @@ def upsert_tiles(conn: sqlite3.Connection, project_dir: str, tile_scheme: str) -
     lyr = gs.GetLayer()
     insert_tiles = []
     for db_tile in db_tiles:
-        ts_tile = [
-            ts_tile for ts_tile in ts_tiles if db_tile["tilename"] == ts_tile["tile"]
-        ]
+        ts_tile = [ts_tile for ts_tile in ts_tiles if db_tile["tilename"] == ts_tile["tile"]]
         if len(ts_tile) == 0:
-            print(
-                f"Warning: {db_tile['tilename']} in database appears to have "
-                "been removed from latest tilescheme"
-            )
+            print(f"Warning: {db_tile['tilename']} in database appears to have " "been removed from latest tilescheme")
             continue
         if len(ts_tile) > 1:
-            raise ValueError(
-                f"More than one tilename {db_tile['tilename']} "
-                "found in tileset.\n"
-                "Please alert NBS.\n"
-                "{debug_info}"
-            )
+            raise ValueError(f"More than one tilename {db_tile['tilename']} " "found in tileset.\n" "Please alert NBS.\n" "{debug_info}")
         ts_tile = ts_tile[0]
         # inserted into db only when delivered_date exists
         # so value of None in ts_tile indicates delivered_date was removed
         if ts_tile["delivered_date"] is None:
-            print(
-                "Warning: Unexpected removal of delivered date "
-                f"for tile {db_tile['tilename']}"
-            )
+            print("Warning: Unexpected removal of delivered date " f"for tile {db_tile['tilename']}")
             continue
-        if (db_tile["delivered_date"] is None) or (
-            ts_tile["delivered_date"] > db_tile["delivered_date"]
-        ):
+        if (db_tile["delivered_date"] is None) or (ts_tile["delivered_date"] > db_tile["delivered_date"]):
             try:
-                if db_tile["geotiff_disk"] and os.path.isfile(
-                    os.path.join(project_dir, db_tile["geotiff_disk"])
-                ):
+                if db_tile["geotiff_disk"] and os.path.isfile(os.path.join(project_dir, db_tile["geotiff_disk"])):
                     os.remove(os.path.join(project_dir, db_tile["geotiff_disk"]))
-                if db_tile["rat_disk"] and os.path.isfile(
-                    os.path.join(project_dir, db_tile["rat_disk"])
-                ):
+                if db_tile["rat_disk"] and os.path.isfile(os.path.join(project_dir, db_tile["rat_disk"])):
                     os.remove(os.path.join(project_dir, db_tile["rat_disk"]))
             except (OSError, PermissionError) as e:
-                print(
-                    "Failed to remove older files for tile "
-                    f"{db_tile['tilename']}. Please close all files and "
-                    "attempt fetch again."
-                )
+                print("Failed to remove older files for tile " f"{db_tile['tilename']}. Please close all files and " "attempt fetch again.")
                 gdal.Unlink(global_tileset)
                 raise e
             lyr.SetSpatialFilter(ogr.CreateGeometryFromWkt(ts_tile["wkt_geom"]))
             if lyr.GetFeatureCount() != 1:
                 gdal.Unlink(global_tileset)
-                raise ValueError(
-                    "Error getting subregion for "
-                    f"{db_tile['tilename']}. \n"
-                    f"{lyr.GetFeatureCount()} subregion(s). \n"
-                    f"{debug_info}"
-                )
+                raise ValueError("Error getting subregion for " f"{db_tile['tilename']}. \n" f"{lyr.GetFeatureCount()} subregion(s). \n" f"{debug_info}")
             region_ft = lyr.GetNextFeature()
             ts_tile["region"] = region_ft.GetField("Region")
             insert_tiles.append(
@@ -636,24 +616,25 @@ def upsert_tiles(conn: sqlite3.Connection, project_dir: str, tile_scheme: str) -
                 print(len(ins))
                 raise ValueError()
         cursor.executemany(
-            """INSERT INTO tiles(tilename, geotiff_link, rat_link,
-                              delivered_date, resolution, utm, subregion, 
-                              geotiff_sha256_checksum, rat_sha256_checksum)
-                              VALUES(?, ?, ? ,? ,? ,?, ?, ?, ?)
-                              ON CONFLICT(tilename) DO UPDATE
-                              SET geotiff_link = EXCLUDED.geotiff_link,
-                              rat_link = EXCLUDED.rat_link,
-                              delivered_date = EXCLUDED.delivered_date,
-                              resolution = EXCLUDED.resolution,
-                              utm = EXCLUDED.utm,
-                              subregion = EXCLUDED.subregion,
-                              geotiff_sha256_checksum = EXCLUDED.geotiff_sha256_checksum,
-                              rat_sha256_checksum = EXCLUDED.rat_sha256_checksum,
-                              geotiff_verified = Null,
-                              rat_verified = Null,
-                              geotiff_disk = Null,
-                              rat_disk = Null
-                              """,
+            """
+            INSERT INTO tiles(tilename, geotiff_link, rat_link,
+            delivered_date, resolution, utm, subregion, 
+            geotiff_sha256_checksum, rat_sha256_checksum)
+            VALUES(?, ?, ? ,? ,? ,?, ?, ?, ?)
+            ON CONFLICT(tilename) DO UPDATE
+            SET geotiff_link = EXCLUDED.geotiff_link,
+            rat_link = EXCLUDED.rat_link,
+            delivered_date = EXCLUDED.delivered_date,
+            resolution = EXCLUDED.resolution,
+            utm = EXCLUDED.utm,
+            subregion = EXCLUDED.subregion,
+            geotiff_sha256_checksum = EXCLUDED.geotiff_sha256_checksum,
+            rat_sha256_checksum = EXCLUDED.rat_sha256_checksum,
+            geotiff_verified = Null,
+            rat_verified = Null,
+            geotiff_disk = Null,
+            rat_disk = Null
+            """,
             insert_tiles,
         )
         conn.commit()
@@ -778,14 +759,7 @@ def sweep_files(conn: sqlite3.Connection, project_dir: str) -> None:
     untracked_subregions = 0
     untracked_utms = 0
     for fields in db_tiles:
-        if (
-            fields["geotiff_disk"]
-            and os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"]))
-            == False
-        ) or (
-            fields["rat_disk"]
-            and os.path.isfile(os.path.join(project_dir, fields["rat_disk"])) == False
-        ):
+        if (fields["geotiff_disk"] and os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) == False) or (fields["rat_disk"] and os.path.isfile(os.path.join(project_dir, fields["rat_disk"])) == False):
             cursor.execute(
                 "DELETE FROM tiles where tilename = ? RETURNING *",
                 (fields["tilename"],),
@@ -796,9 +770,7 @@ def sweep_files(conn: sqlite3.Connection, project_dir: str) -> None:
                 files = ["geotiff_disk", "rat_disk"]
                 for file in files:
                     try:
-                        if del_tile[file] and os.path.isfile(
-                            os.path.join(project_dir, del_tile[file])
-                        ):
+                        if del_tile[file] and os.path.isfile(os.path.join(project_dir, del_tile[file])):
                             os.remove(os.path.join(project_dir, del_tile[file]))
                     except (OSError, PermissionError):
                         continue
@@ -826,9 +798,7 @@ def sweep_files(conn: sqlite3.Connection, project_dir: str) -> None:
                 ]
                 for file in files:
                     try:
-                        if del_subregion[file] and os.path.isfile(
-                            os.path.join(project_dir, del_subregion[file])
-                        ):
+                        if del_subregion[file] and os.path.isfile(os.path.join(project_dir, del_subregion[file])):
                             os.remove(os.path.join(project_dir, del_subregion[file]))
                     except (OSError, PermissionError):
                         continue
@@ -847,9 +817,7 @@ def sweep_files(conn: sqlite3.Connection, project_dir: str) -> None:
                 files = ["utm_vrt", "utm_ovr"]
                 for file in files:
                     try:
-                        if (del_utm[file]) and (
-                            os.path.isfile(os.path.join(project_dir, del_utm[file]))
-                        ):
+                        if (del_utm[file]) and (os.path.isfile(os.path.join(project_dir, del_utm[file]))):
                             os.remove(os.path.join(project_dir, del_utm[file]))
                     except (OSError, PermissionError):
                         continue
@@ -894,9 +862,7 @@ def main(
     project_dir = os.path.expanduser(project_dir)
     if desired_area_filename:
         desired_area_filename = os.path.expanduser(desired_area_filename)
-    if os.path.isabs(project_dir) is False or (
-        desired_area_filename and os.path.isabs(desired_area_filename) is False
-    ):
+    if os.path.isabs(project_dir) is False or (desired_area_filename and os.path.isabs(desired_area_filename) is False):
         print("Please use an absolute path for your project folder and geometry path.")
         if "windows" not in platform.system().lower():
             print("Typically for non windows systems this means starting with '/'")
@@ -909,18 +875,28 @@ def main(
 
     elif data_source.lower() == "modeling":
         data_source = "Modeling"
-        geom_prefix = (
-            "Test-and-Evaluation/Modeling/_Modeling_Tile_Scheme/Modeling_Tile_Scheme"
-        )
+        geom_prefix = "Test-and-Evaluation/Modeling/_Modeling_Tile_Scheme/Modeling_Tile_Scheme"
         tile_prefix = "Test-and-Evaluation/Modeling"
+
+    elif os.path.isdir(data_source):
+        geom_prefix = data_source
+        files = os.listdir(geom_prefix)
+        files = [file for file in files if file.endswith(".gpkg") and "Tile_Scheme" in file]
+        files.sort(reverse=True)
+        data_source = None
+        for file in files:
+            ds_basefile = os.path.basename(file)
+            data_source = ds_basefile.split("_")[0]
+            break
+        if data_source is None:
+            raise ValueError(f"Please pass in directory which contains a tile scheme file if you're using a local data source.")
+        tile_prefix = "Local"
 
     else:
         raise ValueError(f"Invalid data source: {data_source}")
 
     start = datetime.datetime.now()
-    print(
-        f"[{start.strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Beginning work in project folder: {project_dir}"
-    )
+    print(f"[{start.strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Beginning work in project folder: {project_dir}")
     if not os.path.exists(project_dir):
         os.makedirs(project_dir)
 
@@ -929,25 +905,14 @@ def main(
 
     if untrack_missing:
         untracked_tiles, untracked_sr, untracked_utms = sweep_files(conn, project_dir)
-        print(
-            f"Untracked {untracked_tiles} tile(s), "
-            f"{untracked_sr} subregion vrt(s), "
-            f"{untracked_utms} utm vrt(s)"
-        )
+        print(f"Untracked {untracked_tiles} tile(s), " f"{untracked_sr} subregion vrt(s), " f"{untracked_utms} utm vrt(s)")
 
     if desired_area_filename:
         if not os.path.isfile(desired_area_filename):
-            raise ValueError(
-                f"The geometry {desired_area_filename} for "
-                "determining what to download does not exist."
-            )
+            raise ValueError(f"The geometry {desired_area_filename} for " "determining what to download does not exist.")
         tile_list = get_tile_list(desired_area_filename, geom_file)
         available_tile_count = insert_new(conn, tile_list)
-        print(
-            f"\nTracking {available_tile_count} available {data_source} tile(s) "
-            f"discovered in a total of {len(tile_list)} intersected tile(s) "
-            "with given polygon."
-        )
+        print(f"\nTracking {available_tile_count} available {data_source} tile(s) " f"discovered in a total of {len(tile_list)} intersected tile(s) " "with given polygon.")
 
     upsert_tiles(conn, project_dir, geom_file)
 
@@ -962,9 +927,7 @@ def main(
         new_tile_list,
     ) = download_tiles(conn, project_dir, tile_prefix, data_source)
 
-    print(
-        "\n___________________________________ SUMMARY ___________________________________"
-    )
+    print("\n___________________________________ SUMMARY ___________________________________")
     print("\nExisting:")
     print(
         "Number of tiles already existing locally without updates:",
@@ -972,31 +935,14 @@ def main(
     )
     if new_tile_list or missing_tiles:
         print("\nSearch:")
-        print(
-            f"Number of tiles to attempt to fetch: {len(new_tile_list) + len(missing_tiles)} [ {len(new_tile_list)} new data + {len(missing_tiles)} missing locally ]"
-        )
+        print(f"Number of tiles to attempt to fetch: {len(new_tile_list) + len(missing_tiles)} [ {len(new_tile_list)} new data + {len(missing_tiles)} missing locally ]")
         if len(tiles_found) < (len(new_tile_list) + len(missing_tiles)):
-            print(
-                "* Some tiles we wanted to fetch were not found in the S3 bucket."
-                "\n* The NBS may be actively updating the tiles in question."
-                "\n* You can rerun fetch_tiles at a later time to download these tiles."
-                "\n* Please contact the NBS if this issue does not fix itself on subsequent later runs."
-            )
+            print("* Some tiles we wanted to fetch were not found in the S3 bucket." "\n* The NBS may be actively updating the tiles in question." "\n* You can rerun fetch_tiles at a later time to download these tiles." "\n* Please contact the NBS if this issue does not fix itself on subsequent later runs.")
         print("\nFetch:")
-        print(
-            f"Number of tiles found in S3 successfully downloaded: {len(successful_downloads)}/{len(tiles_found)}"
-        )
+        print(f"Number of tiles found in S3 successfully downloaded: {len(successful_downloads)}/{len(tiles_found)}")
         if len(failed_downloads):
-            print(
-                "* Some tiles appear to have failed downloading."
-                "\n* Please rerun fetch_tiles to retry."
-            )
+            print("* Some tiles appear to have failed downloading." "\n* Please rerun fetch_tiles to retry.")
             if len(failed_verifications):
-                print(
-                    f"{len(failed_verifications)} tiles failed checksum verification: {failed_verifications}"
-                    f"\nPlease contact the NBS if this issue does not fix itself on subsequent runs."
-                )
-    print(
-        f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Operation complete after {datetime.datetime.now() - start}"
-    )
+                print(f"{len(failed_verifications)} tiles failed checksum verification: {failed_verifications}" f"\nPlease contact the NBS if this issue does not fix itself on subsequent runs.")
+    print(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Operation complete after {datetime.datetime.now() - start}")
     return successful_downloads, list(set(tiles_not_found + failed_downloads))

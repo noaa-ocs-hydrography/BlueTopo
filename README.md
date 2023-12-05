@@ -14,7 +14,7 @@
 
 ## Overview
 
-This project simplifies getting BlueTopo data in your area of interest.
+This package simplifies getting BlueTopo data in your area of interest.
 
 ## Background
 
