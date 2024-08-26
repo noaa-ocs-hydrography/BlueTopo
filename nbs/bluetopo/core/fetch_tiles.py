@@ -71,7 +71,7 @@ def get_tessellation(
             os.remove(os.path.join(project_dir, tilescheme["location"]))
         except (OSError, PermissionError):
             continue
-    if data_source != "BlueTopo" and data_source != "Modeling":
+    if data_source not in ["BlueTopo", "Modeling", "BAG", "S102V21", "S102V22"]:
         gpkg_files = os.listdir(prefix)
         gpkg_files = [file for file in gpkg_files if file.endswith(".gpkg") and "Tile_Scheme" in file]
         if len(gpkg_files) == 0:
@@ -162,7 +162,10 @@ def download_tiles(
     download_tile_list = all_db_tiles(conn)
     # better tqdm download time estimate?
     random.shuffle(download_tile_list)
-    new_tile_list = [download_tile for download_tile in download_tile_list if download_tile["geotiff_disk"] is None or download_tile["rat_disk"] is None]
+    if data_source.lower() in ['bag', 's102v21', 's102v22']:
+        new_tile_list = [download_tile for download_tile in download_tile_list if download_tile["geotiff_disk"] is None]
+    else:
+        new_tile_list = [download_tile for download_tile in download_tile_list if download_tile["geotiff_disk"] is None or download_tile["rat_disk"] is None]
     print("\nResolving fetch list...")
     if tile_prefix != "Local":
         cred = {
@@ -178,15 +181,26 @@ def download_tiles(
     tiles_not_found = []
     download_dict = {}
     for fields in download_tile_list:
-        if fields["geotiff_disk"] and fields["rat_disk"]:
-            if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) and os.path.isfile(os.path.join(project_dir, fields["rat_disk"])):
-                if fields["geotiff_verified"] != "True" or fields["rat_verified"] != "True":
+        if data_source.lower() in ['bag', 's102v21', 's102v22']:
+            if fields["geotiff_disk"]:
+                if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])):
+                    if fields["geotiff_verified"] != "True":
+                        missing_tiles.append(fields["tilename"])
+                    else:
+                        existing_tiles.append(fields["tilename"])
+                        continue
+                if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) is False:
                     missing_tiles.append(fields["tilename"])
-                else:
-                    existing_tiles.append(fields["tilename"])
-                    continue
-            if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) is False or os.path.isfile(os.path.join(project_dir, fields["rat_disk"])) is False:
-                missing_tiles.append(fields["tilename"])
+        else:
+            if fields["geotiff_disk"] and fields["rat_disk"]:
+                if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) and os.path.isfile(os.path.join(project_dir, fields["rat_disk"])):
+                    if fields["geotiff_verified"] != "True" or fields["rat_verified"] != "True":
+                        missing_tiles.append(fields["tilename"])
+                    else:
+                        existing_tiles.append(fields["tilename"])
+                        continue
+                if os.path.isfile(os.path.join(project_dir, fields["geotiff_disk"])) is False or os.path.isfile(os.path.join(project_dir, fields["rat_disk"])) is False:
+                    missing_tiles.append(fields["tilename"])
         if "BlueTopo" in tile_prefix or "Modeling" in tile_prefix:
             tilename = fields["tilename"]
             pfx = tile_prefix + f"/{tilename}/"
@@ -220,6 +234,38 @@ def download_tiles(
                 tiles_found.append(tilename)
             else:
                 tiles_not_found.append(tilename)
+        # refactor later
+        elif 'Navigation_Test_and_Evaluation' in tile_prefix:
+            tilename = fields["tilename"]
+            if fields["geotiff_link"] and fields["geotiff_link"] != "None":
+                found = False
+                for obj in client.list_objects(Bucket='noaa-ocs-nationalbathymetry-pds', Prefix=fields['geotiff_link'].split('amazonaws.com/')[1])['Contents']:
+                    if os.path.basename(fields["geotiff_link"])[7:13] in obj['Key']:
+                        download_dict[tilename] = {
+                            "tile": tilename,
+                            "bucket": bucket,
+                            "client": client,
+                            "subregion": fields["subregion"],
+                            "utm": fields["utm"],
+                        }
+                        source_name = obj["Key"]
+                        download_dict[tilename]["rat"] = 'None'
+                        download_dict[tilename]["rat_disk"] = 'None'
+                        download_dict[tilename]["rat_dest"] = 'None'
+                        download_dict[tilename]["rat_verified"] = 'None'
+                        download_dict[tilename]["rat_sha256_checksum"] = 'None'
+                        download_dict[tilename]["geotiff"] = source_name
+                        download_dict[tilename]["geotiff_disk"] = os.path.join(data_source, f"UTM{fields['utm']}", os.path.basename(fields["geotiff_link"]))
+                        download_dict[tilename]["geotiff_dest"] = os.path.join(project_dir, download_dict[tilename]["geotiff_disk"])
+                        download_dict[tilename]["geotiff_verified"] = fields["geotiff_verified"]
+                        download_dict[tilename]["geotiff_sha256_checksum"] = fields["geotiff_sha256_checksum"]
+                        if not os.path.exists(os.path.dirname(download_dict[tilename]["geotiff_dest"])):
+                            os.makedirs(os.path.dirname(download_dict[tilename]["geotiff_dest"]))
+                        found = True
+                        tiles_found.append(tilename)
+                        break
+                if found is False:
+                    tiles_not_found.append(tilename)
         # refactor later
         elif tile_prefix == "Local":
             tilename = fields["tilename"]
@@ -267,14 +313,20 @@ def download_tiles(
                 shutil.copy(downloads["geotiff"], downloads["geotiff_dest"])
                 shutil.copy(downloads["rat"], downloads["rat_dest"])
             else:
+                # refactor later
                 downloads["client"].download_file(downloads["bucket"], downloads["geotiff"], downloads["geotiff_dest"])
-                downloads["client"].download_file(downloads["bucket"], downloads["rat"], downloads["rat_dest"])
-            if os.path.isfile(downloads["geotiff_dest"]) is False or os.path.isfile(downloads["rat_dest"]) is False:
-                return {"Tile": downloads["tile"], "Result": False, "Reason": "missing download"}
-            geotiff_hash = hashlib.sha256(open(downloads["geotiff_dest"], "rb").read()).hexdigest()
-            rat_hash = hashlib.sha256(open(downloads["rat_dest"], "rb").read()).hexdigest()
-            if downloads["geotiff_sha256_checksum"] != geotiff_hash or downloads["rat_sha256_checksum"] != rat_hash:
-                return {"Tile": downloads["tile"], "Result": False, "Reason": "incorrect hash"}
+                if os.path.isfile(downloads["geotiff_dest"]) is False:
+                    return {"Tile": downloads["tile"], "Result": False, "Reason": "missing download"}
+                geotiff_hash = hashlib.sha256(open(downloads["geotiff_dest"], "rb").read()).hexdigest()
+                if downloads["geotiff_sha256_checksum"] != geotiff_hash:
+                    return {"Tile": downloads["tile"], "Result": False, "Reason": "incorrect hash"}
+                if downloads["rat"] != 'None':
+                    downloads["client"].download_file(downloads["bucket"], downloads["rat"], downloads["rat_dest"])
+                    if os.path.isfile(downloads["rat_dest"]) is False:
+                        return {"Tile": downloads["tile"], "Result": False, "Reason": "missing download"}
+                    rat_hash = hashlib.sha256(open(downloads["rat_dest"], "rb").read()).hexdigest()
+                    if downloads["rat_sha256_checksum"] != rat_hash:
+                        return {"Tile": downloads["tile"], "Result": False, "Reason": "incorrect hash"}
         except Exception as e:
             return {"Tile": downloads["tile"], "Result": False, "Reason": "exception"}
         return {"Tile": downloads["tile"], "Result": True, "Reason": "success"}
@@ -363,7 +415,16 @@ def get_tile_list(desired_area_filename: str, tile_scheme_filename: str) -> [str
         for feature in intersect_lyr:
             fields = {}
             for idx in range(lyr_defn.GetFieldCount()):
-                fields[lyr_defn.GetFieldDefn(idx).name] = feature.GetField(idx)
+                # refactor later
+                field_name = lyr_defn.GetFieldDefn(idx).name
+                if field_name in ('TILE_ID'):
+                    field_name = 'tile'
+                if field_name in ('BAG', 'S102V21', 'S102V22'):
+                    field_name = 'GeoTIFF_Link'
+                    fields['RAT_Link'] = 'None'
+                if field_name in ('ISSUANCE'):
+                    field_name = 'Delivered_Date'
+                fields[field_name] = feature.GetField(idx)
             feature_list.append(fields)
     return feature_list
 
@@ -503,7 +564,9 @@ def insert_new(conn: sqlite3.Connection, tiles: list) -> int:
         amount of delivered tiles from input tiles.
     """
     cursor = conn.cursor()
-    tile_list = [(tile["tile"],) for tile in tiles if tile["Delivered_Date"] and tile["GeoTIFF_Link"] and tile["RAT_Link"]]
+    tile_list = [(tile["tile"],) for tile in tiles if tile["Delivered_Date"] 
+                 and tile["GeoTIFF_Link"] and tile["RAT_Link"]
+                 and tile["GeoTIFF_Link"] != 'None']
     cursor.executemany(
         """INSERT INTO tiles(tilename)
                           VALUES(?) ON CONFLICT DO NOTHING""",
@@ -532,7 +595,7 @@ def all_db_tiles(conn: sqlite3.Connection) -> list:
     return [dict(row) for row in cursor.fetchall()]
 
 
-def upsert_tiles(conn: sqlite3.Connection, project_dir: str, tile_scheme: str) -> None:
+def upsert_tiles(conn: sqlite3.Connection, project_dir: str, tile_scheme: str, data_source: str) -> None:
     """
     Update tile records in database with latest deliveries found in tilescheme.
 
@@ -561,6 +624,34 @@ def upsert_tiles(conn: sqlite3.Connection, project_dir: str, tile_scheme: str) -
         for field_num in range(ts_defn.GetFieldCount()):
             field_name = ts_defn.GetFieldDefn(field_num).name
             field_list[field_name.lower()] = ft.GetField(field_name)
+        # refactor later
+        if data_source == 'BAG':
+            field_list['tile'] = ft.GetField('tile_id')
+            field_list['geotiff_link'] = ft.GetField('bag')
+            field_list['geotiff_sha256_checksum'] = ft.GetField('bag_sha256')
+            field_list['rat_link'] = 'None'
+            field_list['rat_sha256_checksum'] = 'None'
+            field_list['delivered_date'] = ft.GetField('issuance')
+            field_list['utm'] = ft.GetField('utm')
+            field_list['resolution'] = ft.GetField('resolution')
+        if data_source == 'S102V21':
+            field_list['tile'] = ft.GetField('tile_id')
+            field_list['geotiff_link'] = ft.GetField('s102v21')
+            field_list['geotiff_sha256_checksum'] = ft.GetField('s102v21_sha256')
+            field_list['rat_link'] = 'None'
+            field_list['rat_sha256_checksum'] = 'None'
+            field_list['delivered_date'] = ft.GetField('issuance')
+            field_list['utm'] = ft.GetField('utm')
+            field_list['resolution'] = ft.GetField('resolution')
+        if data_source == 'S102V22':
+            field_list['tile'] = ft.GetField('tile_id')
+            field_list['geotiff_link'] = ft.GetField('s102v22')
+            field_list['geotiff_sha256_checksum'] = ft.GetField('s102v22_sha256')
+            field_list['rat_link'] = 'None'
+            field_list['rat_sha256_checksum'] = 'None'
+            field_list['delivered_date'] = ft.GetField('issuance')
+            field_list['utm'] = ft.GetField('utm')
+            field_list['resolution'] = ft.GetField('resolution')
         ts_tiles.append(field_list)
     ts_ds = None
     global_tileset = global_region_tileset(1, "1.2")
@@ -878,6 +969,21 @@ def main(
         geom_prefix = "Test-and-Evaluation/Modeling/_Modeling_Tile_Scheme/Modeling_Tile_Scheme"
         tile_prefix = "Test-and-Evaluation/Modeling"
 
+    elif data_source.lower() == "bag":
+        data_source = "BAG"
+        geom_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/_Navigation_Tile_Scheme/Navigation_Tile_Scheme"
+        tile_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/BAG"
+
+    elif data_source.lower() == "s102v21":
+        data_source = "S102V21"
+        geom_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/_Navigation_Tile_Scheme/Navigation_Tile_Scheme"
+        tile_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V21"
+
+    elif data_source.lower() == "s102v22":
+        data_source = "S102V22"
+        geom_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/_Navigation_Tile_Scheme/Navigation_Tile_Scheme"
+        tile_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V22"
+
     elif os.path.isdir(data_source):
         geom_prefix = data_source
         files = os.listdir(geom_prefix)
@@ -914,7 +1020,7 @@ def main(
         available_tile_count = insert_new(conn, tile_list)
         print(f"\nTracking {available_tile_count} available {data_source} tile(s) " f"discovered in a total of {len(tile_list)} intersected tile(s) " "with given polygon.")
 
-    upsert_tiles(conn, project_dir, geom_file)
+    upsert_tiles(conn, project_dir, geom_file, data_source)
 
     (
         tiles_found,

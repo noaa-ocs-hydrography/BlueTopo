@@ -165,19 +165,19 @@ def build_sub_vrts(
         tiffs = [os.path.join(project_dir, tile["geotiff_disk"]) for tile in tiles]
         # revisit levels
         if "2" in res:
-            create_vrt(tiffs, res_vrt, [2, 4], relative_to_vrt)
+            create_vrt(tiffs, res_vrt, [2, 4], relative_to_vrt, data_source)
             vrt_list.append(res_vrt)
             fields["res_2_vrt"] = rel_path
             if os.path.isfile(os.path.join(project_dir, fields["res_2_vrt"] + ".ovr")):
                 fields["res_2_ovr"] = rel_path + ".ovr"
         if "4" in res:
-            create_vrt(tiffs, res_vrt, [4, 8], relative_to_vrt)
+            create_vrt(tiffs, res_vrt, [4, 8], relative_to_vrt, data_source)
             vrt_list.append(res_vrt)
             fields["res_4_vrt"] = rel_path
             if os.path.isfile(os.path.join(project_dir, fields["res_4_vrt"] + ".ovr")):
                 fields["res_4_ovr"] = rel_path + ".ovr"
         if "8" in res:
-            create_vrt(tiffs, res_vrt, [8], relative_to_vrt)
+            create_vrt(tiffs, res_vrt, [8], relative_to_vrt, data_source)
             vrt_list.append(res_vrt)
             fields["res_8_vrt"] = rel_path
             if os.path.isfile(os.path.join(project_dir, fields["res_8_vrt"] + ".ovr")):
@@ -186,14 +186,14 @@ def build_sub_vrts(
             vrt_list.extend(tiffs)
     rel_path = os.path.join(rel_dir, subregion["region"] + "_complete.vrt")
     complete_vrt = os.path.join(project_dir, rel_path)
-    create_vrt(vrt_list, complete_vrt, [16], relative_to_vrt)
+    create_vrt(vrt_list, complete_vrt, [16], relative_to_vrt, data_source)
     fields["complete_vrt"] = rel_path
     if os.path.isfile(os.path.join(project_dir, fields["complete_vrt"] + ".ovr")):
         fields["complete_ovr"] = rel_path + ".ovr"
     return fields
 
 
-def create_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool) -> None:
+def create_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool, data_source: str) -> None:
     """
     Build VRT from files.
 
@@ -218,7 +218,10 @@ def create_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool) 
     except (OSError, PermissionError) as e:
         print(f"Failed to remove older vrt files for {vrt_path}\n" "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, VRTNodata=np.nan, resampleAlg="near", resolution="highest")
+    vrt_ndv = np.nan
+    if data_source.lower() in ('bag', 's102v21', 's102v22'):
+        vrt_ndv = 1000000
+    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, VRTNodata=vrt_ndv, resampleAlg="near", resolution="highest")
     cwd = os.getcwd()
     try:
         os.chdir(os.path.dirname(vrt_path))
@@ -231,8 +234,9 @@ def create_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool) 
         band1.SetDescription("Elevation")
         band2 = vrt.GetRasterBand(2)
         band2.SetDescription("Uncertainty")
-        band3 = vrt.GetRasterBand(3)
-        band3.SetDescription("Contributor")
+        if data_source.lower() not in ('bag', 's102v21', 's102v22'):
+            band3 = vrt.GetRasterBand(3)
+            band3.SetDescription("Contributor")
         vrt = None
     except:
         raise RuntimeError(f"VRT failed to build for {vrt_path}")
@@ -282,11 +286,32 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_path: 
         survey_date_end=[str, gdal.GFU_Generic],
     )
     if data_source.lower() == "hsd":
-        expected_fields['catzoc'] = [int, gdal.GFU_Generic]
-        expected_fields['supercession_score'] = [float, gdal.GFU_Generic]
-        expected_fields['decay_score'] = [float, gdal.GFU_Generic]
-        expected_fields['unqualified'] = [int, gdal.GFU_Generic]
-        expected_fields['sensitive'] = [int, gdal.GFU_Generic]
+        expected_fields["catzoc"] = [int, gdal.GFU_Generic]
+        expected_fields["supercession_score"] = [float, gdal.GFU_Generic]
+        expected_fields["decay_score"] = [float, gdal.GFU_Generic]
+        expected_fields["unqualified"] = [int, gdal.GFU_Generic]
+        expected_fields["sensitive"] = [int, gdal.GFU_Generic]
+    # refactor later
+    if data_source.lower() in ['S102V22']:
+        expected_fields = dict(
+            value=[int, gdal.GFU_MinMax],
+            data_assessment=[int, gdal.GFU_Generic],
+            feature_least_depth=[float, gdal.GFU_Generic],
+            significant_features=[float, gdal.GFU_Generic],
+            feature_size=[str, gdal.GFU_Generic],
+            # ?
+            featuresizevar=[float, gdal.GFU_Generic],
+            coverage=[int, gdal.GFU_Generic],
+            bathy_coverage=[int, gdal.GFU_Generic],
+            horizontal_uncert_fixed=[float, gdal.GFU_Generic],
+            horizontal_uncert_var=[float, gdal.GFU_Generic],
+            survey_date_start=[str, gdal.GFU_Generic],
+            survey_date_end=[str, gdal.GFU_Generic],
+            source_survey_id=[str, gdal.GFU_Generic],
+            source_institution=[str, gdal.GFU_Generic],
+            # ?
+            bathymetricuncertaintytype=[str, gdal.GFU_Generic],
+        )
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM tiles WHERE utm = ?", (utm,))
     exp_fields = list(expected_fields.keys())
@@ -299,12 +324,17 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_path: 
         rat_file = os.path.join(project_dir, tile["rat_disk"])
         if os.path.isfile(rat_file) is False:
             continue
-        ds = gdal.Open(gtiff)
-        contrib = ds.GetRasterBand(3)
-        rat_n = contrib.GetDefaultRAT()
-        for col in range(rat_n.GetColumnCount()):
-            if exp_fields[col] != rat_n.GetNameOfCol(col).lower():
-                raise ValueError("Unexpected field order")
+        if data_source.lower() != 's102v22':
+            ds = gdal.Open(gtiff)
+            contrib = ds.GetRasterBand(3)
+            rat_n = contrib.GetDefaultRAT()
+            for col in range(rat_n.GetColumnCount()):
+                if exp_fields[col] != rat_n.GetNameOfCol(col).lower():
+                    raise ValueError("Unexpected field order")
+        else:
+            ds = gdal.Open(f'S102:{gtiff}:QualityOfSurvey')
+            contrib = ds.GetRasterBand(1)
+            rat_n = contrib.GetDefaultRAT()
         for row in range(rat_n.GetRowCount()):
             exist = False
             for survey in surveys:
@@ -323,7 +353,10 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_path: 
                 continue
             curr = []
             for col in range(rat_n.GetColumnCount()):
-                curr.append(rat_n.GetValueAsString(row, col))
+                entry_val = rat_n.GetValueAsString(row, col)
+                if rat_n.GetNameOfCol(col).lower() in ['featuresizevar', 'bathymetricuncertaintytype']:
+                    entry_val = 'TBD'
+                curr.append(entry_val)
             surveys.append(curr)
     rat = gdal.RasterAttributeTable()
     for entry in expected_fields:
@@ -373,7 +406,7 @@ def select_tiles_by_subregion(project_dir: str, conn: sqlite3.Connection, subreg
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM tiles WHERE subregion = ?", (subregion,))
     tiles = [dict(row) for row in cursor.fetchall()]
-    existing_tiles = [tile for tile in tiles if tile["geotiff_disk"] and tile["rat_disk"] and os.path.isfile(os.path.join(project_dir, tile["geotiff_disk"])) and os.path.isfile(os.path.join(project_dir, tile["rat_disk"]))]
+    existing_tiles = [tile for tile in tiles if tile["geotiff_disk"] and os.path.isfile(os.path.join(project_dir, tile["geotiff_disk"]))]
     if len(tiles) - len(existing_tiles) != 0:
         print(f"Did not find the files for {len(tiles) - len(existing_tiles)} " f"registered tile(s) in subregion {subregion}. " "Run fetch_tiles to retrieve files " "or correct the directory path if incorrect.")
     return existing_tiles
@@ -679,7 +712,7 @@ def main(project_dir: str, data_source: str = None, relative_to_vrt: bool = True
 
     if not os.path.isfile(os.path.join(project_dir, f"{data_source.lower()}_registry.db")):
         raise ValueError(f"SQLite database not found. Confirm correct folder. " "Note: fetch_tiles must be run at least once prior " "to build_vrt")
-    
+
     if not os.path.isdir(os.path.join(project_dir, data_source)):
         raise ValueError(f"Tile downloads folder not found for {data_source}. Confirm correct folder. " "Note: fetch_tiles must be run at least once prior " "to build_vrt")
 
@@ -723,8 +756,9 @@ def main(project_dir: str, data_source: str = None, relative_to_vrt: bool = True
             rel_path = os.path.join(f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}.vrt")
             utm_vrt = os.path.join(project_dir, rel_path)
             print(f"Building utm{ub_utm['utm']}...")
-            create_vrt(vrt_list, utm_vrt, [32, 64], relative_to_vrt)
-            add_vrt_rat(conn, ub_utm["utm"], project_dir, utm_vrt, data_source)
+            create_vrt(vrt_list, utm_vrt, [32, 64], relative_to_vrt, data_source)
+            if data_source.lower() not in ('bag', 's102v21', 's102v22'):
+                add_vrt_rat(conn, ub_utm["utm"], project_dir, utm_vrt, data_source)
             fields = {"utm_vrt": rel_path, "utm_ovr": None, "utm": ub_utm["utm"]}
             if os.path.isfile(os.path.join(project_dir, rel_path + ".ovr")):
                 fields["utm_ovr"] = rel_path + ".ovr"
