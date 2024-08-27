@@ -295,11 +295,13 @@ def build_sub_vrts_pmn(
         rel_subdataset2_path = os.path.join(rel_dir, subregion["region"] + f"_{res}_subdataset2.vrt")
         res_subdataset2_vrt = os.path.join(project_dir, rel_subdataset2_path)
         tiffs_subdataset1 = [os.path.join(project_dir, tile["file_disk"]) for tile in tiles]
-        tiffs_subdataset2 = [os.path.join(project_dir, f"S102:'{tile["file_disk"]}':QualityOfSurvey") for tile in tiles]
+        tiffs_subdataset2 = ['S102:/' + os.path.join(project_dir, f'{tile["file_disk"]}') + ':QualityOfSurvey' for tile in tiles]
         # revisit levels
         if "2" in res:
             create_vrt_pmn(tiffs_subdataset1, res_subdataset1_vrt, [2, 4], relative_to_vrt, subdataset = 1)
             vrt_subdataset1_list.append(res_subdataset1_vrt)
+            print(tiffs_subdataset2)
+            print(res_subdataset2_vrt)
             create_vrt_pmn(tiffs_subdataset2, res_subdataset2_vrt, [2, 4], relative_to_vrt, subdataset = 2)
             vrt_subdataset2_list.append(res_subdataset2_vrt)
             fields["res_2_subdataset1_vrt"] = rel_subdataset1_path
@@ -461,7 +463,7 @@ def combine_vrts(files: list, vrt_path: str, relative_to_vrt: bool) -> None:
     except (OSError, PermissionError) as e:
         print(f"Failed to remove older vrt files for {vrt_path}\n" "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, VRTNodata=np.nan, resampleAlg="near", resolution="highest")
+    vrt_options = gdal.BuildVRTOptions(options='-separate', resampleAlg="near", resolution="highest")
     cwd = os.getcwd()
     try:
         os.chdir(os.path.dirname(vrt_path))
@@ -475,7 +477,7 @@ def combine_vrts(files: list, vrt_path: str, relative_to_vrt: bool) -> None:
         band2 = vrt.GetRasterBand(2)
         band2.SetDescription("Uncertainty")
         band3 = vrt.GetRasterBand(3)
-        band3.SetDescription("Contributor")
+        band3.SetDescription("QualityOfSurvey")
         vrt = None
     except:
         raise RuntimeError(f"VRT failed to build for {vrt_path}")
@@ -508,7 +510,7 @@ def create_vrt_pmn(files: list, vrt_path: str, levels: list, relative_to_vrt: bo
     except (OSError, PermissionError) as e:
         print(f"Failed to remove older vrt files for {vrt_path}\n" "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(srcNodata=np.nan, VRTNodata=np.nan, resampleAlg="near", resolution="highest")
+    vrt_options = gdal.BuildVRTOptions(resampleAlg="near", resolution="highest")
     cwd = os.getcwd()
     try:
         os.chdir(os.path.dirname(vrt_path))
@@ -624,29 +626,57 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_path: 
         survey_date_end=[str, gdal.GFU_Generic],
     )
     if data_source.lower() == "hsd":
-        expected_fields['catzoc'] = [int, gdal.GFU_Generic]
-        expected_fields['supercession_score'] = [float, gdal.GFU_Generic]
-        expected_fields['decay_score'] = [float, gdal.GFU_Generic]
-        expected_fields['unqualified'] = [int, gdal.GFU_Generic]
-        expected_fields['sensitive'] = [int, gdal.GFU_Generic]
+        expected_fields["catzoc"] = [int, gdal.GFU_Generic]
+        expected_fields["supercession_score"] = [float, gdal.GFU_Generic]
+        expected_fields["decay_score"] = [float, gdal.GFU_Generic]
+        expected_fields["unqualified"] = [int, gdal.GFU_Generic]
+        expected_fields["sensitive"] = [int, gdal.GFU_Generic]
+    # refactor later
+    if data_source.lower() in ['s102v22']:
+        expected_fields = dict(
+            value=[int, gdal.GFU_MinMax],
+            data_assessment=[int, gdal.GFU_Generic],
+            feature_least_depth=[float, gdal.GFU_Generic],
+            significant_features=[float, gdal.GFU_Generic],
+            feature_size=[str, gdal.GFU_Generic],
+            # ?
+            featuresizevar=[int, gdal.GFU_Generic],
+            coverage=[int, gdal.GFU_Generic],
+            bathy_coverage=[int, gdal.GFU_Generic],
+            horizontal_uncert_fixed=[float, gdal.GFU_Generic],
+            horizontal_uncert_var=[float, gdal.GFU_Generic],
+            survey_date_start=[str, gdal.GFU_Generic],
+            survey_date_end=[str, gdal.GFU_Generic],
+            source_survey_id=[str, gdal.GFU_Generic],
+            source_institution=[str, gdal.GFU_Generic],
+            # ?
+            bathymetricuncertaintytype=[int, gdal.GFU_Generic],
+        )
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM tiles WHERE utm = ?", (utm,))
     exp_fields = list(expected_fields.keys())
     tiles = [dict(row) for row in cursor.fetchall()]
     surveys = []
     for tile in tiles:
-        gtiff = os.path.join(project_dir, tile["geotiff_disk"])
+        if tile['file_disk'] is None or os.path.isfile(os.path.join(project_dir, tile["file_disk"])) is False:
+            continue
+        gtiff = os.path.join(project_dir, tile["file_disk"])
         if os.path.isfile(gtiff) is False:
             continue
-        rat_file = os.path.join(project_dir, tile["rat_disk"])
-        if os.path.isfile(rat_file) is False:
-            continue
-        ds = gdal.Open(gtiff)
-        contrib = ds.GetRasterBand(3)
-        rat_n = contrib.GetDefaultRAT()
-        for col in range(rat_n.GetColumnCount()):
-            if exp_fields[col] != rat_n.GetNameOfCol(col).lower():
-                raise ValueError("Unexpected field order")
+        # rat_file = os.path.join(project_dir, tile["rat_disk"])
+        # if os.path.isfile(rat_file) is False and data_source.lower() != 's102v22':
+        #     continue
+        if data_source.lower() != 's102v22':
+            ds = gdal.Open(gtiff)
+            contrib = ds.GetRasterBand(3)
+            rat_n = contrib.GetDefaultRAT()
+            for col in range(rat_n.GetColumnCount()):
+                if exp_fields[col] != rat_n.GetNameOfCol(col).lower():
+                    raise ValueError("Unexpected field order")
+        else:
+            ds = gdal.Open(f'S102:{gtiff}:QualityOfSurvey')
+            contrib = ds.GetRasterBand(1)
+            rat_n = contrib.GetDefaultRAT()
         for row in range(rat_n.GetRowCount()):
             exist = False
             for survey in surveys:
@@ -665,7 +695,10 @@ def add_vrt_rat(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_path: 
                 continue
             curr = []
             for col in range(rat_n.GetColumnCount()):
-                curr.append(rat_n.GetValueAsString(row, col))
+                entry_val = rat_n.GetValueAsString(row, col)
+                if rat_n.GetNameOfCol(col).lower() in ['featuresizevar', 'bathymetricuncertaintytype']:
+                    entry_val = 0
+                curr.append(entry_val)
             surveys.append(curr)
     rat = gdal.RasterAttributeTable()
     for entry in expected_fields:
@@ -713,7 +746,7 @@ def select_tiles_by_subregion_pmn(project_dir: str, conn: sqlite3.Connection, su
         list of tile records.
     """
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tiles WHERE subregion = ?", (subregion,))
+    cursor.execute("SELECT * FROM tiles WHERE subregion = ? and file_disk is not null", (subregion,))
     tiles = [dict(row) for row in cursor.fetchall()]
     existing_tiles = [tile for tile in tiles if tile["file_disk"] and os.path.isfile(os.path.join(project_dir, tile["file_disk"]))]
     if len(tiles) - len(existing_tiles) != 0:
@@ -1094,7 +1127,7 @@ def missing_subregions_pmn(project_dir: str, conn: sqlite3.Connection) -> int:
         count of subregions with missing files.
     """
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM vrt_subregion WHERE built = 1")
+    cursor.execute("SELECT * FROM vrt_subregion WHERE built_subdataset1 = 1 or built_subdataset2 = 1")
     subregions = [dict(row) for row in cursor.fetchall()]
     missing_subregion_count = 0
     # todo comparison against tiles table to know res vrts exist where expected
@@ -1161,7 +1194,7 @@ def missing_subregions_pmn(project_dir: str, conn: sqlite3.Connection) -> int:
                               SET utm_subdataset1_vrt = ?, utm_subdataset1_ovr = ?, 
                               utm_subdataset2_vrt = ?, utm_subdataset2_ovr = ?, 
 
-                              utm_combined_vrt = ?
+                              utm_combined_vrt = ?,
                               
                               built_subdataset1 = 0,
                               built_subdataset2 = 0,
@@ -1493,21 +1526,19 @@ def main(project_dir: str, data_source: str = None, relative_to_vrt: bool = True
                 if len(vrt_subdataset1_list) < 1 or len(vrt_subdataset2_list) < 1:
                     continue
 
-                rel_subdataset1_path = os.path.join(f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}_subdataset1.vrt")
+                rel_subdataset1_path = os.path.join(f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}_BathymetryCoverage.vrt")
                 utm_subdataset1_vrt = os.path.join(project_dir, rel_subdataset1_path)
 
-                rel_subdataset2_path = os.path.join(f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}_subdataset2.vrt")
+                rel_subdataset2_path = os.path.join(f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}_QualityOfSurvey.vrt")
                 utm_subdataset2_vrt = os.path.join(project_dir, rel_subdataset2_path)
 
-                rel_combined_path = os.path.join(f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}_combined.vrt")
+                rel_combined_path = os.path.join(f"{data_source}_VRT", f"{data_source}_Fetched_UTM{ub_utm['utm']}.vrt")
                 utm_combined_vrt = os.path.join(project_dir, rel_combined_path)
 
                 print(f"Building utm{ub_utm['utm']}...")
-                create_vrt_pmn(vrt_list, utm_subdataset1_vrt, [32, 64], relative_to_vrt, subdataset = 1)
+                create_vrt_pmn(vrt_subdataset1_list, utm_subdataset1_vrt, [32, 64], relative_to_vrt, subdataset = 1)
 
-                create_vrt_pmn(vrt_list, utm_subdataset2_vrt, [32, 64], relative_to_vrt, subdataset = 2)
-
-                add_vrt_rat(conn, ub_utm["utm"], project_dir, utm_subdataset2_vrt, data_source)
+                create_vrt_pmn(vrt_subdataset2_list, utm_subdataset2_vrt, [32, 64], relative_to_vrt, subdataset = 2)
 
                 fields = {"utm_subdataset1_vrt": rel_subdataset1_path, 
                           "utm_subdataset2_vrt": rel_subdataset2_path, 
@@ -1527,6 +1558,9 @@ def main(project_dir: str, data_source: str = None, relative_to_vrt: bool = True
                     raise RuntimeError("Overview failed to create for " f"utm{ub_utm['utm']}. Please try again. " "If error persists, please contact NBS.")
 
                 combine_vrts([utm_subdataset1_vrt, utm_subdataset2_vrt], utm_combined_vrt, relative_to_vrt)
+
+                if data_source.lower() not in ('bag', 's102v21'):
+                    add_vrt_rat(conn, ub_utm["utm"], project_dir, utm_combined_vrt, data_source)
 
                 update_utm_pmn(conn, fields)
                 print(f"utm{ub_utm['utm']} complete after {datetime.datetime.now() - utm_start}")

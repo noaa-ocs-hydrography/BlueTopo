@@ -76,7 +76,7 @@ def get_tessellation(
         the downloaded file path string.
     """
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tileset WHERE tilescheme = 'Tessellation'")
+    cursor.execute("SELECT * FROM catalogue WHERE file = 'Tessellation'")
     for tilescheme in [dict(row) for row in cursor.fetchall()]:
         try:
             os.remove(os.path.join(project_dir, tilescheme["location"]))
@@ -130,7 +130,7 @@ def get_tessellation(
             sys.exit(1)
     print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename}")
     cursor.execute(
-        """REPLACE INTO tileset(tilescheme, location, downloaded)
+        """REPLACE INTO catalogue(file, location, downloaded)
                       VALUES(?, ?, ?)""",
         ("Tessellation", relative, datetime.datetime.now()),
     )
@@ -167,7 +167,7 @@ def get_xml(
         the downloaded file path string.
     """
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tileset WHERE tilescheme = 'XML'")
+    cursor.execute("SELECT * FROM catalogue WHERE file = 'XML'")
     for tilescheme in [dict(row) for row in cursor.fetchall()]:
         try:
             if os.path.isfile(os.path.join(project_dir, tilescheme["location"])):
@@ -190,12 +190,12 @@ def get_xml(
         tileschemes.sort(key=lambda x: x["LastModified"], reverse=True)
         source_name = tileschemes[0]["Key"]
         filename = os.path.basename(source_name)
-        relative = os.path.join(data_source, f"XML", filename)
+        relative = os.path.join(data_source, f"Data", filename)
         if len(tileschemes) > 1:
             print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: More than one XML found in {prefix}, using {filename}")
         destination_name = os.path.join(project_dir, relative)
         filename_renamed = 'CATALOG.XML'
-        relative_renamed = os.path.join(data_source, f"XML", filename_renamed)
+        relative_renamed = os.path.join(data_source, f"Data", filename_renamed)
         destination_name_renamed = os.path.join(project_dir, relative_renamed)
         if not os.path.exists(os.path.dirname(destination_name)):
             os.makedirs(os.path.dirname(destination_name))
@@ -211,7 +211,7 @@ def get_xml(
             sys.exit(1)
     print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename_renamed}")
     cursor.execute(
-        """REPLACE INTO tileset(tilescheme, location, downloaded)
+        """REPLACE INTO catalogue(file, location, downloaded)
                       VALUES(?, ?, ?)""",
         ("XML", relative, datetime.datetime.now()),
     )
@@ -359,7 +359,7 @@ def download_tiles_pmn(
     failed_verifications = [download["Tile"] for download in results if (download["Result"] == False and download["Reason"] == "incorrect hash")]
 
     if len(successful_downloads) > 0:
-        update_records(conn, download_dict, successful_downloads)
+        update_records_pmn(conn, download_dict, successful_downloads)
 
     return (
         list(set(tiles_found)),
@@ -700,6 +700,139 @@ def transform_layer(input_layer: ogr.Layer, desired_crs: osr.SpatialReference) -
     return out_ds
 
 
+def update_records_pmn(conn: sqlite3.Connection, download_dict: dict, successful_downloads: list) -> None:
+    """
+    Update tile record and associated tables in SQLite database.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        database connection object.
+    download_dict : dict
+        relevant fields per tile
+    successful_downloads : list
+        list of tilenames successfully downloaded
+    """
+    # TODO refactor more sensibly
+    tiles_records = []
+    subregion_records = []
+    utm_records = []
+    for tilename in download_dict:
+        if tilename in successful_downloads:
+            tiles_records.append((download_dict[tilename]["file_disk"], "True", tilename))
+            subregion_records.append(
+                (
+                    download_dict[tilename]["subregion"],
+                    download_dict[tilename]["utm"],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    0,
+                    0
+                )
+            )
+            utm_records.append((download_dict[tilename]["utm"], None, None, None, None, None, 0, 0, 0))
+    if len(tiles_records) == 0:
+        return
+    cursor = conn.cursor()
+    cursor.execute("BEGIN TRANSACTION;")
+    cursor.executemany(
+        """
+                        UPDATE tiles
+                        SET file_disk = ?,
+                        file_verified = ?
+                        WHERE tilename = ?
+                        """,
+        tiles_records,
+    )
+    cursor.executemany(
+        """
+                        INSERT INTO vrt_subregion(region, utm,
+                        res_2_subdataset1_vrt,
+                        res_2_subdataset1_ovr,
+                        res_2_subdataset2_vrt,
+                        res_2_subdataset2_ovr,
+                        res_4_subdataset1_vrt, 
+                        res_4_subdataset1_ovr, 
+                        res_4_subdataset2_vrt, 
+                        res_4_subdataset2_ovr, 
+                        res_8_subdataset1_vrt, 
+                        res_8_subdataset1_ovr,
+                        res_8_subdataset2_vrt, 
+                        res_8_subdataset2_ovr,
+                        complete_subdataset1_vrt,
+                        complete_subdataset1_ovr,
+                        complete_subdataset2_vrt,
+                        complete_subdataset2_ovr, 
+                        built_subdataset1,
+                        built_subdataset2)
+                        VALUES(?, ?, ?, ?, ? ,? , ?, ? ,? ,? ,?, ?, ?, ?, ?, ? ,? , ?, ? ,?)
+                        ON CONFLICT(region) DO UPDATE
+                        SET utm = EXCLUDED.utm,
+                        res_2_subdataset1_vrt = EXCLUDED.res_2_subdataset1_vrt,
+                        res_2_subdataset1_ovr = EXCLUDED.res_2_subdataset1_ovr,
+                        res_2_subdataset2_vrt = EXCLUDED.res_2_subdataset2_vrt,
+                        res_2_subdataset2_ovr = EXCLUDED.res_2_subdataset2_ovr,
+                        res_4_subdataset1_vrt = EXCLUDED.res_4_subdataset1_vrt,
+                        res_4_subdataset1_ovr = EXCLUDED.res_4_subdataset1_ovr,
+                        res_4_subdataset2_vrt = EXCLUDED.res_4_subdataset2_vrt,
+                        res_4_subdataset2_ovr = EXCLUDED.res_4_subdataset2_ovr,
+
+                        res_8_subdataset1_vrt = EXCLUDED.res_8_subdataset1_vrt,
+                        res_8_subdataset1_ovr = EXCLUDED.res_8_subdataset1_ovr,
+                        res_8_subdataset2_vrt = EXCLUDED.res_8_subdataset2_vrt,
+                        res_8_subdataset2_ovr = EXCLUDED.res_8_subdataset2_ovr,
+
+                        complete_subdataset1_vrt = EXCLUDED.complete_subdataset1_vrt,
+                        complete_subdataset1_ovr = EXCLUDED.complete_subdataset1_ovr,
+
+                        complete_subdataset2_vrt = EXCLUDED.complete_subdataset2_vrt,
+                        complete_subdataset2_ovr = EXCLUDED.complete_subdataset2_ovr,
+
+                        built_subdataset1 = EXCLUDED.built_subdataset1,
+                        built_subdataset2 = EXCLUDED.built_subdataset2
+                        """,
+        subregion_records,
+    )
+    cursor.executemany(
+        """
+                        INSERT INTO vrt_utm(utm,
+                        utm_subdataset1_vrt, utm_subdataset1_ovr, 
+                        utm_subdataset2_vrt, utm_subdataset2_ovr,
+                        utm_combined_vrt,
+                        built_subdataset1,
+                        built_subdataset2,
+                        built_combined)
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(utm) DO UPDATE
+                        SET utm_subdataset1_vrt = EXCLUDED.utm_subdataset1_vrt,
+                        utm_subdataset1_ovr = EXCLUDED.utm_subdataset1_ovr,
+                        utm_subdataset2_vrt = EXCLUDED.utm_subdataset2_vrt,
+                        utm_subdataset2_ovr = EXCLUDED.utm_subdataset2_ovr,
+                        utm_combined_vrt = EXCLUDED.utm_combined_vrt,
+                        built_subdataset1 = EXCLUDED.built_subdataset1,
+                        built_subdataset2 = EXCLUDED.built_subdataset2,
+                        built_combined = EXCLUDED.built_combined
+                        """,
+        utm_records,
+    )
+    cursor.execute("COMMIT;")
+    conn.commit()
+
+
 def update_records(conn: sqlite3.Connection, download_dict: dict, successful_downloads: list) -> None:
     """
     Update tile record and associated tables in SQLite database.
@@ -801,11 +934,11 @@ def insert_new_pmn(conn: sqlite3.Connection, tiles: list, data_source) -> int:
         amount of delivered tiles from input tiles.
     """
     if data_source.lower() == "bag":
-        tile_list = [(tile["tile"],) for tile in tiles if tile["ISSUANCE"] and tile["BAG"]]
+        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["BAG"]]
     elif data_source.lower() == "s102v21":
-        tile_list = [(tile["tile"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V21"]]
+        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V21"]]
     elif data_source.lower() == "s102v22":
-        tile_list = [(tile["tile"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V22"]]
+        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V22"]]
     else:
         raise ValueError(f"Unexpected data source {data_source}")
     cursor = conn.cursor()
@@ -935,10 +1068,8 @@ def upsert_tiles_pmn(conn: sqlite3.Connection, project_dir: str, tile_scheme: st
             continue
         if (db_tile["delivered_date"] is None) or (ts_tile["delivered_date"] > db_tile["delivered_date"]):
             try:
-                if db_tile["geotiff_disk"] and os.path.isfile(os.path.join(project_dir, db_tile["geotiff_disk"])):
-                    os.remove(os.path.join(project_dir, db_tile["geotiff_disk"]))
-                if db_tile["rat_disk"] and os.path.isfile(os.path.join(project_dir, db_tile["rat_disk"])):
-                    os.remove(os.path.join(project_dir, db_tile["rat_disk"]))
+                if db_tile["file_disk"] and os.path.isfile(os.path.join(project_dir, db_tile["file_disk"])):
+                    os.remove(os.path.join(project_dir, db_tile["file_disk"]))
             except (OSError, PermissionError) as e:
                 print("Failed to remove older files for tile " f"{db_tile['tilename']}. Please close all files and " "attempt fetch again.")
                 gdal.Unlink(global_tileset)
@@ -963,9 +1094,10 @@ def upsert_tiles_pmn(conn: sqlite3.Connection, project_dir: str, tile_scheme: st
     if insert_tiles:
         cursor = conn.cursor()
         for ins in insert_tiles:
-            if len(ins) != 9:
+            if len(ins) != 7:
                 print(len(ins))
                 raise ValueError()
+        print(insert_tiles[0])
         cursor.executemany(
             """
             INSERT INTO tiles(tilename, file_link,
@@ -980,7 +1112,7 @@ def upsert_tiles_pmn(conn: sqlite3.Connection, project_dir: str, tile_scheme: st
             subregion = EXCLUDED.subregion,
             file_sha256_checksum = EXCLUDED.file_sha256_checksum,
             file_verified = Null,
-            file_disk = Null,
+            file_disk = Null
             """,
             insert_tiles,
         )
@@ -1342,13 +1474,13 @@ def main(
     elif data_source.lower() == "s102v21":
         data_source = "S102V21"
         geom_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/_Navigation_Tile_Scheme/Navigation_Tile_Scheme"
-        xml_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V21/Data"
+        xml_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V21/_CATALOG"
         tile_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V21"
 
     elif data_source.lower() == "s102v22":
         data_source = "S102V22"
         geom_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/_Navigation_Tile_Scheme/Navigation_Tile_Scheme"
-        xml_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V22/Data"
+        xml_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V22/_CATALOG"
         tile_prefix = "Test-and-Evaluation/Navigation_Test_and_Evaluation/S102V22"
 
 
@@ -1394,24 +1526,34 @@ def main(
             available_tile_count = insert_new(conn, tile_list)
         else:
             tile_list = get_tile_list_pmn(desired_area_filename, geom_file)
-            available_tile_count = insert_new_pmn(conn, tile_list)
+            available_tile_count = insert_new_pmn(conn, tile_list, data_source)
         print(f"\nTracking {available_tile_count} available {data_source} tile(s) " f"discovered in a total of {len(tile_list)} intersected tile(s) " "with given polygon.")
     if data_source.lower() not in ("s102v22"):    
         upsert_tiles(conn, project_dir, geom_file)
     else:
-        upsert_tiles_pmn(conn, project_dir, geom_file)
-
-    (
-        tiles_found,
-        tiles_not_found,
-        successful_downloads,
-        failed_downloads,
-        existing_tiles,
-        missing_tiles,
-        failed_verifications,
-        new_tile_list,
-    ) = download_tiles(conn, project_dir, tile_prefix, data_source)
-
+        upsert_tiles_pmn(conn, project_dir, geom_file, data_source)
+    if data_source.lower() not in ("s102v22"):    
+        (
+            tiles_found,
+            tiles_not_found,
+            successful_downloads,
+            failed_downloads,
+            existing_tiles,
+            missing_tiles,
+            failed_verifications,
+            new_tile_list,
+        ) = download_tiles(conn, project_dir, tile_prefix, data_source)
+    else:
+        (
+            tiles_found,
+            tiles_not_found,
+            successful_downloads,
+            failed_downloads,
+            existing_tiles,
+            missing_tiles,
+            failed_verifications,
+            new_tile_list,
+        ) = download_tiles_pmn(conn, project_dir, tile_prefix, data_source)
     print("\n___________________________________ SUMMARY ___________________________________")
     print("\nExisting:")
     print(
