@@ -26,7 +26,7 @@ from botocore.client import Config
 from osgeo import gdal, ogr, osr
 from tqdm import tqdm
 
-from nbs.bluetopo.core.build_vrt import connect_to_survey_registry, connect_to_survey_registry_pmn
+from nbs.bluetopo.core.build_vrt import connect_to_survey_registry, connect_to_survey_registry_pmn1, connect_to_survey_registry_pmn2
 
 debug_info = f"""
 Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}
@@ -294,10 +294,7 @@ def download_tiles_pmn(
                         }
                         source_name = obj["Key"]
                         download_dict[tilename]["file"] = source_name
-                        if data_source.lower() in ['bag']:
-                            download_dict[tilename]["file_disk"] = os.path.join(data_source, f"UTM{fields['utm']}", os.path.basename(fields["file_link"]))
-                        if data_source.lower() in ['s102v21', 's102v22']:
-                            download_dict[tilename]["file_disk"] = os.path.join(data_source, "Data", os.path.basename(fields["file_link"]))
+                        download_dict[tilename]["file_disk"] = os.path.join(data_source, "Data", os.path.basename(fields["file_link"]))
                         download_dict[tilename]["file_dest"] = os.path.join(project_dir, download_dict[tilename]["file_disk"])
                         download_dict[tilename]["file_verified"] = fields["file_verified"]
                         download_dict[tilename]["file_sha256_checksum"] = fields["file_sha256_checksum"]
@@ -560,59 +557,6 @@ def download_tiles(
         failed_verifications,
         new_tile_list,
     )
-
-
-def get_tile_list_pmn(desired_area_filename: str, tile_scheme_filename: str) -> [str]:
-    """
-    Get the list of tiles inside the given polygon(s).
-
-    Parameters
-    ----------
-    desired_area_filename : str
-        a gdal compatible file path denoting geometries that reflect the region
-        of interest.
-    tile_scheme_filename : str
-        a gdal compatible file path denoting geometries that reflect the
-        tessellation scheme with addressing information for the desired tiles.
-
-    Returns
-    -------
-    feature_list : str
-        list of tiles intersecting with the provided polygon(s).
-    """
-    data_source = ogr.Open(desired_area_filename)
-    if data_source is None:
-        print("Unable to open desired area file")
-        return None
-    source = ogr.Open(tile_scheme_filename)
-    if source is None:
-        print("Unable to open tile scheme file")
-        return None
-    driver = ogr.GetDriverByName("MEMORY")
-    intersect = driver.CreateDataSource("memData")
-    intersect_lyr = intersect.CreateLayer("mem", geom_type=ogr.wkbPolygon)
-    source_layer = source.GetLayer(0)
-    source_crs = source_layer.GetSpatialRef()
-    num_target_layers = data_source.GetLayerCount()
-    feature_list = []
-    for layer_num in range(num_target_layers):
-        target_layer = data_source.GetLayer(layer_num)
-        target_crs = target_layer.GetSpatialRef()
-        same_crs = target_crs.IsSame(source_crs)
-        if not same_crs:
-            transformed_input = transform_layer(target_layer, source_crs)
-            target_layer = transformed_input.GetLayer(0)
-        target_layer.Intersection(source_layer, intersect_lyr)
-        if not same_crs:
-            transformed_input = None
-        lyr_defn = intersect_lyr.GetLayerDefn()
-        for feature in intersect_lyr:
-            fields = {}
-            for idx in range(lyr_defn.GetFieldCount()):
-                fields[lyr_defn.GetFieldDefn(idx).name] = feature.GetField(idx)
-            feature_list.append(fields)
-    return feature_list
-
 
 def get_tile_list(desired_area_filename: str, tile_scheme_filename: str) -> [str]:
     """
@@ -1506,10 +1450,14 @@ def main(
     if not os.path.exists(project_dir):
         os.makedirs(project_dir)
 
-    if data_source.lower() not in ("s102v22"):
-        conn = connect_to_survey_registry(project_dir, data_source)
+    if data_source.lower() in ("bag", "s102v21"):
+        conn = connect_to_survey_registry_pmn1(project_dir, data_source)
+    if data_source.lower() in ("s102v22"):
+        conn = connect_to_survey_registry_pmn2(project_dir, data_source)
     else:
-        conn = connect_to_survey_registry_pmn(project_dir, data_source)
+        conn = connect_to_survey_registry(project_dir, data_source)
+
+    if data_source.lower() in ("s102v21", "s102v22"):
         get_xml(conn, project_dir, xml_prefix, data_source)
 
     geom_file = get_tessellation(conn, project_dir, geom_prefix, data_source)
@@ -1521,29 +1469,20 @@ def main(
     if desired_area_filename:
         if not os.path.isfile(desired_area_filename):
             raise ValueError(f"The geometry {desired_area_filename} for " "determining what to download does not exist.")
-        if data_source.lower() not in ("s102v22"):
+        if data_source.lower() in ("bag", "s102v21", "s102v22"):
+            tile_list = get_tile_list(desired_area_filename, geom_file)
+            available_tile_count = insert_new_pmn(conn, tile_list, data_source)
+        else:
             tile_list = get_tile_list(desired_area_filename, geom_file)
             available_tile_count = insert_new(conn, tile_list)
-        else:
-            tile_list = get_tile_list_pmn(desired_area_filename, geom_file)
-            available_tile_count = insert_new_pmn(conn, tile_list, data_source)
         print(f"\nTracking {available_tile_count} available {data_source} tile(s) " f"discovered in a total of {len(tile_list)} intersected tile(s) " "with given polygon.")
-    if data_source.lower() not in ("s102v22"):    
-        upsert_tiles(conn, project_dir, geom_file)
-    else:
+
+    if data_source.lower() in ("bag", "s102v21", "s102v22"):    
         upsert_tiles_pmn(conn, project_dir, geom_file, data_source)
-    if data_source.lower() not in ("s102v22"):    
-        (
-            tiles_found,
-            tiles_not_found,
-            successful_downloads,
-            failed_downloads,
-            existing_tiles,
-            missing_tiles,
-            failed_verifications,
-            new_tile_list,
-        ) = download_tiles(conn, project_dir, tile_prefix, data_source)
     else:
+        upsert_tiles(conn, project_dir, geom_file)
+
+    if data_source.lower() in ("bag", "s102v21", "s102v22"):    
         (
             tiles_found,
             tiles_not_found,
@@ -1554,6 +1493,17 @@ def main(
             failed_verifications,
             new_tile_list,
         ) = download_tiles_pmn(conn, project_dir, tile_prefix, data_source)
+    else:
+        (
+            tiles_found,
+            tiles_not_found,
+            successful_downloads,
+            failed_downloads,
+            existing_tiles,
+            missing_tiles,
+            failed_verifications,
+            new_tile_list,
+        ) = download_tiles(conn, project_dir, tile_prefix, data_source)
     print("\n___________________________________ SUMMARY ___________________________________")
     print("\nExisting:")
     print(
