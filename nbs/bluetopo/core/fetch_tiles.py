@@ -47,7 +47,8 @@ def convert_datetime(val):
 
 sqlite3.register_converter("datetime", convert_datetime)
 
-def get_tessellation(
+
+def get_tessellation_pmn(
     conn: sqlite3.Connection,
     project_dir: str,
     prefix: str,
@@ -131,6 +132,97 @@ def get_tessellation(
     print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename}")
     cursor.execute(
         """REPLACE INTO catalogue(file, location, downloaded)
+                      VALUES(?, ?, ?)""",
+        ("Tessellation", relative, datetime.datetime.now()),
+    )
+    conn.commit()
+    return destination_name
+
+
+def get_tessellation(
+    conn: sqlite3.Connection,
+    project_dir: str,
+    prefix: str,
+    data_source: str,
+    bucket: str = "noaa-ocs-nationalbathymetry-pds",
+) -> str:
+    """
+    Download the tessellation scheme geopackage from AWS.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        database connection object.
+    project_dir : str
+        destination directory for project.
+    prefix : str
+        the prefix for the geopackage on AWS to find the file.
+    data_source : str
+        the data source for the project e.g. 'BlueTopo' or 'Modeling'.
+    bucket : str
+        AWS bucket for the National Bathymetric Source project.
+
+    Returns
+    -------
+    destination_name : str
+        the downloaded file path string.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tileset WHERE tilescheme = 'Tessellation'")
+    for tilescheme in [dict(row) for row in cursor.fetchall()]:
+        try:
+            os.remove(os.path.join(project_dir, tilescheme["location"]))
+        except (OSError, PermissionError):
+            continue
+    if data_source not in ["BlueTopo", "Modeling", "BAG", "S102V21", "S102V22"]:
+        gpkg_files = os.listdir(prefix)
+        gpkg_files = [file for file in gpkg_files if file.endswith(".gpkg") and "Tile_Scheme" in file]
+        if len(gpkg_files) == 0:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: No geometry found in {prefix}")
+            return None
+        gpkg_files.sort(reverse=True)
+        filename = gpkg_files[0]
+        if len(gpkg_files) > 1:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: More than one geometry found in {prefix}, using {gpkg_files[0]}")
+        destination_name = os.path.join(project_dir, data_source, f"Tessellation", gpkg_files[0])
+        if not os.path.exists(os.path.dirname(destination_name)):
+            os.makedirs(os.path.dirname(destination_name))
+        try:
+            shutil.copy(os.path.join(prefix, gpkg_files[0]), destination_name)
+            relative = os.path.join(data_source, f"Tessellation", gpkg_files[0])
+        except:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: " "Failed to download tile scheme " "possibly due to conflict with an open existing file. " "Please close all files and attempt again")
+            sys.exit(1)
+    else:
+        cred = {
+            "aws_access_key_id": "",
+            "aws_secret_access_key": "",
+            "config": Config(signature_version=UNSIGNED),
+        }
+        client = boto3.client("s3", **cred)
+        pageinator = client.get_paginator("list_objects_v2")
+        objs = pageinator.paginate(Bucket=bucket, Prefix=prefix).build_full_result()
+        if "Contents" not in objs:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: No geometry found in {prefix}")
+            return None
+        tileschemes = objs["Contents"]
+        tileschemes.sort(key=lambda x: x["LastModified"], reverse=True)
+        source_name = tileschemes[0]["Key"]
+        filename = os.path.basename(source_name)
+        relative = os.path.join(data_source, f"Tessellation", filename)
+        if len(tileschemes) > 1:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: More than one geometry found in {prefix}, using {filename}")
+        destination_name = os.path.join(project_dir, relative)
+        if not os.path.exists(os.path.dirname(destination_name)):
+            os.makedirs(os.path.dirname(destination_name))
+        try:
+            client.download_file(bucket, source_name, destination_name)
+        except (OSError, PermissionError) as e:
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: " "Failed to download tile scheme " "possibly due to conflict with an open existing file. " "Please close all files and attempt again")
+            sys.exit(1)
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename}")
+    cursor.execute(
+        """REPLACE INTO tileset(tilescheme, location, downloaded)
                       VALUES(?, ?, ?)""",
         ("Tessellation", relative, datetime.datetime.now()),
     )
@@ -356,7 +448,10 @@ def download_tiles_pmn(
     failed_verifications = [download["Tile"] for download in results if (download["Result"] == False and download["Reason"] == "incorrect hash")]
 
     if len(successful_downloads) > 0:
-        update_records_pmn(conn, download_dict, successful_downloads)
+        if data_source.lower() == "s102v22":
+            update_records_pmn2(conn, download_dict, successful_downloads)
+        else:
+            update_records_pmn1(conn, download_dict, successful_downloads)
 
     return (
         list(set(tiles_found)),
@@ -644,7 +739,91 @@ def transform_layer(input_layer: ogr.Layer, desired_crs: osr.SpatialReference) -
     return out_ds
 
 
-def update_records_pmn(conn: sqlite3.Connection, download_dict: dict, successful_downloads: list) -> None:
+def update_records_pmn1(conn: sqlite3.Connection, download_dict: dict, successful_downloads: list) -> None:
+    """
+    Update tile record and associated tables in SQLite database.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        database connection object.
+    download_dict : dict
+        relevant fields per tile
+    successful_downloads : list
+        list of tilenames successfully downloaded
+    """
+    # TODO refactor more sensibly
+    tiles_records = []
+    subregion_records = []
+    utm_records = []
+    for tilename in download_dict:
+        if tilename in successful_downloads:
+            tiles_records.append((download_dict[tilename]["file_disk"], "True", tilename))
+            subregion_records.append(
+                (
+                    download_dict[tilename]["subregion"],
+                    download_dict[tilename]["utm"],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    0,
+                )
+            )
+            utm_records.append((download_dict[tilename]["utm"], None, None, 0))
+    if len(tiles_records) == 0:
+        return
+    cursor = conn.cursor()
+    cursor.execute("BEGIN TRANSACTION;")
+    cursor.executemany(
+        """
+                        UPDATE tiles
+                        SET file_disk = ?,
+                        file_verified = ?
+                        WHERE tilename = ?
+                        """,
+        tiles_records,
+    )
+    cursor.executemany(
+        """
+                        INSERT INTO vrt_subregion(region, utm, res_2_vrt,
+                        res_2_ovr, res_4_vrt, res_4_ovr, res_8_vrt, res_8_ovr,
+                        complete_vrt, complete_ovr, built)
+                        VALUES(?, ?, ?, ?, ? ,? , ?, ? ,? ,? ,?)
+                        ON CONFLICT(region) DO UPDATE
+                        SET utm = EXCLUDED.utm,
+                        res_2_vrt = EXCLUDED.res_2_vrt,
+                        res_2_ovr = EXCLUDED.res_2_ovr,
+                        res_4_vrt = EXCLUDED.res_4_vrt,
+                        res_4_ovr = EXCLUDED.res_4_ovr,
+                        res_8_vrt = EXCLUDED.res_8_vrt,
+                        res_8_ovr = EXCLUDED.res_8_ovr,
+                        complete_vrt = EXCLUDED.complete_vrt,
+                        complete_ovr = EXCLUDED.complete_ovr,
+                        built = EXCLUDED.built
+                        """,
+        subregion_records,
+    )
+    cursor.executemany(
+        """
+                        INSERT INTO vrt_utm(utm, utm_vrt, utm_ovr, built)
+                        VALUES(?, ?, ?, ?)
+                        ON CONFLICT(utm) DO UPDATE
+                        SET utm_vrt = EXCLUDED.utm_vrt,
+                        utm_ovr = EXCLUDED.utm_ovr,
+                        built = EXCLUDED.built
+                        """,
+        utm_records,
+    )
+    cursor.execute("COMMIT;")
+    conn.commit()
+
+
+def update_records_pmn2(conn: sqlite3.Connection, download_dict: dict, successful_downloads: list) -> None:
     """
     Update tile record and associated tables in SQLite database.
 
@@ -878,11 +1057,11 @@ def insert_new_pmn(conn: sqlite3.Connection, tiles: list, data_source) -> int:
         amount of delivered tiles from input tiles.
     """
     if data_source.lower() == "bag":
-        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["BAG"]]
+        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["BAG"] and tile["BAG"].lower() != "none"]
     elif data_source.lower() == "s102v21":
-        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V21"]]
+        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V21"] and tile["S102V21"].lower() != "none"]
     elif data_source.lower() == "s102v22":
-        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V22"]]
+        tile_list = [(tile["TILE_ID"],) for tile in tiles if tile["ISSUANCE"] and tile["S102V22"] and tile["S102V22"].lower() != "none"]
     else:
         raise ValueError(f"Unexpected data source {data_source}")
     cursor = conn.cursor()
@@ -1041,7 +1220,6 @@ def upsert_tiles_pmn(conn: sqlite3.Connection, project_dir: str, tile_scheme: st
             if len(ins) != 7:
                 print(len(ins))
                 raise ValueError()
-        print(insert_tiles[0])
         cursor.executemany(
             """
             INSERT INTO tiles(tilename, file_link,
@@ -1452,7 +1630,7 @@ def main(
 
     if data_source.lower() in ("bag", "s102v21"):
         conn = connect_to_survey_registry_pmn1(project_dir, data_source)
-    if data_source.lower() in ("s102v22"):
+    elif data_source.lower() in ("s102v22"):
         conn = connect_to_survey_registry_pmn2(project_dir, data_source)
     else:
         conn = connect_to_survey_registry(project_dir, data_source)
@@ -1460,7 +1638,10 @@ def main(
     if data_source.lower() in ("s102v21", "s102v22"):
         get_xml(conn, project_dir, xml_prefix, data_source)
 
-    geom_file = get_tessellation(conn, project_dir, geom_prefix, data_source)
+    if data_source.lower() in ("bag", "s102v21", "s102v22"):
+        geom_file = get_tessellation_pmn(conn, project_dir, geom_prefix, data_source)
+    else:
+        geom_file = get_tessellation(conn, project_dir, geom_prefix, data_source)
 
     if untrack_missing:
         untracked_tiles, untracked_sr, untracked_utms = sweep_files(conn, project_dir)
