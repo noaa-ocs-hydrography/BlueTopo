@@ -31,7 +31,7 @@ def connect_to_survey_registry_pmn2(project_dir: str, data_source: str) -> sqlit
     conn : sqlite3.Connection
         connection to SQLite database.
     """
-    catalogue_fields = {"file": "text", "location": "text", "downloaded": "text"}     
+    catalog_fields = {"file": "text", "location": "text", "downloaded": "text"}     
     vrt_subregion_fields = {"region": "text", "utm": "text", 
                             "res_2_subdataset1_vrt": "text", "res_2_subdataset1_ovr": "text", 
                             "res_2_subdataset2_vrt": "text", "res_2_subdataset2_ovr": "text",
@@ -70,7 +70,7 @@ def connect_to_survey_registry_pmn2(project_dir: str, data_source: str) -> sqlit
             cursor = conn.cursor()
             cursor.execute(
                 """
-                CREATE TABLE IF NOT EXISTS catalogue (
+                CREATE TABLE IF NOT EXISTS catalog (
                 file text PRIMARY KEY
                 );
                 """
@@ -97,7 +97,7 @@ def connect_to_survey_registry_pmn2(project_dir: str, data_source: str) -> sqlit
                 """
             )
             conn.commit()
-            cursor.execute("SELECT name FROM pragma_table_info('catalogue')")
+            cursor.execute("SELECT name FROM pragma_table_info('catalog')")
             tileset_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
             cursor.execute("SELECT name FROM pragma_table_info('vrt_subregion')")
             vrt_subregion_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
@@ -105,9 +105,9 @@ def connect_to_survey_registry_pmn2(project_dir: str, data_source: str) -> sqlit
             vrt_utm_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
             cursor.execute("SELECT name FROM pragma_table_info('tiles')")
             tiles_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
-            for field in catalogue_fields:
+            for field in catalog_fields:
                 if field not in tileset_existing_fields:
-                    cursor.execute(f"ALTER TABLE catalogue ADD COLUMN {field} {catalogue_fields[field]}")
+                    cursor.execute(f"ALTER TABLE catalog ADD COLUMN {field} {catalog_fields[field]}")
                     conn.commit()
             for field in vrt_subregion_fields:
                 if field not in vrt_subregion_existing_fields:
@@ -143,7 +143,7 @@ def connect_to_survey_registry_pmn1(project_dir: str, data_source: str) -> sqlit
     conn : sqlite3.Connection
         connection to SQLite database.
     """
-    catalogue_fields = {"file": "text", "location": "text", "downloaded": "text"}
+    catalog_fields = {"file": "text", "location": "text", "downloaded": "text"}
     vrt_subregion_fields = {"region": "text", "utm": "text", 
                         "res_2_vrt": "text", "res_2_ovr": "text", 
                         "res_4_vrt": "text", "res_4_ovr": "text", 
@@ -173,7 +173,7 @@ def connect_to_survey_registry_pmn1(project_dir: str, data_source: str) -> sqlit
             cursor = conn.cursor()
             cursor.execute(
                 """
-                CREATE TABLE IF NOT EXISTS catalogue (
+                CREATE TABLE IF NOT EXISTS catalog (
                 file text PRIMARY KEY
                 );
                 """
@@ -200,7 +200,7 @@ def connect_to_survey_registry_pmn1(project_dir: str, data_source: str) -> sqlit
                 """
             )
             conn.commit()
-            cursor.execute("SELECT name FROM pragma_table_info('catalogue')")
+            cursor.execute("SELECT name FROM pragma_table_info('catalog')")
             tileset_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
             cursor.execute("SELECT name FROM pragma_table_info('vrt_subregion')")
             vrt_subregion_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
@@ -208,9 +208,9 @@ def connect_to_survey_registry_pmn1(project_dir: str, data_source: str) -> sqlit
             vrt_utm_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
             cursor.execute("SELECT name FROM pragma_table_info('tiles')")
             tiles_existing_fields = [dict(row)["name"] for row in cursor.fetchall()]
-            for field in catalogue_fields:
+            for field in catalog_fields:
                 if field not in tileset_existing_fields:
-                    cursor.execute(f"ALTER TABLE catalogue ADD COLUMN {field} {catalogue_fields[field]}")
+                    cursor.execute(f"ALTER TABLE catalog ADD COLUMN {field} {catalog_fields[field]}")
                     conn.commit()
             for field in vrt_subregion_fields:
                 if field not in vrt_subregion_existing_fields:
@@ -388,13 +388,18 @@ def build_sub_vrts_pmn(
         rel_subdataset2_path = os.path.join(rel_dir, subregion["region"] + f"_{res}_QualityOfSurvey.vrt")
         res_subdataset2_vrt = os.path.join(project_dir, rel_subdataset2_path)
         tiffs_subdataset1 = [os.path.join(project_dir, tile["file_disk"]) for tile in tiles]
-        tiffs_subdataset2 = ['S102:/' + os.path.join(project_dir, f'{tile["file_disk"]}') + ':QualityOfSurvey' for tile in tiles]
+        tiffs_subdataset2 = []
+        for tile in tiles:
+            fpath =  os.path.join(project_dir, f'{tile["file_disk"]}').replace("\\", "/")
+            if os.path.join(project_dir, f'{tile["file_disk"]}').startswith('/') and os.path.join(project_dir, f'{tile["file_disk"]}').startswith('//') is False:
+                tiffs_subdataset2.append('S102:"/' + fpath + '":QualityOfSurvey')
+            else:
+                tiffs_subdataset2.append('S102:"' + fpath + '":QualityOfSurvey')
+        # tiffs_subdataset2 = ['S102:/' + os.path.join(project_dir, f'{tile["file_disk"]}') + ':QualityOfSurvey' for tile in tiles]
         # revisit levels
         if "2" in res:
             create_vrt_pmn(tiffs_subdataset1, res_subdataset1_vrt, [2, 4], relative_to_vrt, subdataset = 1)
             vrt_subdataset1_list.append(res_subdataset1_vrt)
-            print(tiffs_subdataset2)
-            print(res_subdataset2_vrt)
             create_vrt_pmn(tiffs_subdataset2, res_subdataset2_vrt, [2, 4], relative_to_vrt, subdataset = 2)
             vrt_subdataset2_list.append(res_subdataset2_vrt)
             fields["res_2_subdataset1_vrt"] = rel_subdataset1_path
@@ -643,7 +648,7 @@ def combine_vrts(files: list, vrt_path: str, relative_to_vrt: bool) -> None:
     except (OSError, PermissionError) as e:
         print(f"Failed to remove older vrt files for {vrt_path}\n" "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(options='-separate', resampleAlg="near", resolution="highest")
+    vrt_options = gdal.BuildVRTOptions(options='-separate -allow_projection_difference', resampleAlg="near", resolution="highest")
     cwd = os.getcwd()
     try:
         os.chdir(os.path.dirname(vrt_path))
@@ -690,13 +695,16 @@ def create_vrt_pmn(files: list, vrt_path: str, levels: list, relative_to_vrt: bo
     except (OSError, PermissionError) as e:
         print(f"Failed to remove older vrt files for {vrt_path}\n" "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(resampleAlg="near", resolution="highest")
+    vrt_options = gdal.BuildVRTOptions(options='-allow_projection_difference', resampleAlg="near", resolution="highest")
     cwd = os.getcwd()
     try:
         os.chdir(os.path.dirname(vrt_path))
         if relative_to_vrt is True:
             for idx in range(len(files)):
-                files[idx] = os.path.relpath(files[idx], os.path.dirname(vrt_path))
+                if 'S102:' in files[idx]:
+                    continue
+                else:
+                    files[idx] = os.path.relpath(files[idx], os.path.dirname(vrt_path))
         relative_vrt_path = os.path.relpath(vrt_path, os.getcwd())
         vrt = gdal.BuildVRT(relative_vrt_path, files, options=vrt_options)
         if subdataset == 1:
@@ -741,7 +749,7 @@ def create_vrt_pmn1(files: list, vrt_path: str, levels: list, relative_to_vrt: b
     except (OSError, PermissionError) as e:
         print(f"Failed to remove older vrt files for {vrt_path}\n" "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(resampleAlg="near", resolution="highest")
+    vrt_options = gdal.BuildVRTOptions(options='-allow_projection_difference', resampleAlg="near", resolution="highest")
     cwd = os.getcwd()
     try:
         os.chdir(os.path.dirname(vrt_path))
@@ -788,7 +796,7 @@ def create_vrt(files: list, vrt_path: str, levels: list, relative_to_vrt: bool) 
     except (OSError, PermissionError) as e:
         print(f"Failed to remove older vrt files for {vrt_path}\n" "Please close all files and attempt again")
         sys.exit(1)
-    vrt_options = gdal.BuildVRTOptions(resampleAlg="near", resolution="highest")
+    vrt_options = gdal.BuildVRTOptions(options='-allow_projection_difference', resampleAlg="near", resolution="highest")
     cwd = os.getcwd()
     try:
         os.chdir(os.path.dirname(vrt_path))
@@ -886,7 +894,7 @@ def add_vrt_rat_pmn(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_pa
     for tile in tiles:
         if tile['file_disk'] is None or os.path.isfile(os.path.join(project_dir, tile["file_disk"])) is False:
             continue
-        gtiff = os.path.join(project_dir, tile["file_disk"])
+        gtiff = os.path.join(project_dir, tile["file_disk"]).replace('\\', '/')
         if os.path.isfile(gtiff) is False:
             continue
         # rat_file = os.path.join(project_dir, tile["rat_disk"])
@@ -900,7 +908,7 @@ def add_vrt_rat_pmn(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_pa
                 if exp_fields[col] != rat_n.GetNameOfCol(col).lower():
                     raise ValueError("Unexpected field order")
         else:
-            ds = gdal.Open(f'S102:{gtiff}:QualityOfSurvey')
+            ds = gdal.Open(f'S102:"{gtiff}":QualityOfSurvey')
             contrib = ds.GetRasterBand(1)
             rat_n = contrib.GetDefaultRAT()
         for row in range(rat_n.GetRowCount()):
@@ -1748,12 +1756,12 @@ def main(project_dir: str, data_source: str = None, relative_to_vrt: bool = True
         data_source = "BAG"
 
     elif data_source.lower() == "s102v21":
-        if int(gdal.VersionInfo()) < 3080000:
+        if int(gdal.VersionInfo()) < 3090000:
             raise RuntimeError("Please update GDAL to >=3.8 to run build_vrt for S102V22.")
         data_source = "S102V21"
 
     elif data_source.lower() == "s102v22":
-        if int(gdal.VersionInfo()) < 3080000:
+        if int(gdal.VersionInfo()) < 3090000:
             raise RuntimeError("Please update GDAL to >=3.8 to run build_vrt for S102V22.")
         data_source = "S102V22"
 

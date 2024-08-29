@@ -77,7 +77,7 @@ def get_tessellation_pmn(
         the downloaded file path string.
     """
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM catalogue WHERE file = 'Tessellation'")
+    cursor.execute("SELECT * FROM catalog WHERE file = 'Tessellation'")
     for tilescheme in [dict(row) for row in cursor.fetchall()]:
         try:
             os.remove(os.path.join(project_dir, tilescheme["location"]))
@@ -131,7 +131,7 @@ def get_tessellation_pmn(
             sys.exit(1)
     print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename}")
     cursor.execute(
-        """REPLACE INTO catalogue(file, location, downloaded)
+        """REPLACE INTO catalog(file, location, downloaded)
                       VALUES(?, ?, ?)""",
         ("Tessellation", relative, datetime.datetime.now()),
     )
@@ -259,7 +259,7 @@ def get_xml(
         the downloaded file path string.
     """
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM catalogue WHERE file = 'XML'")
+    cursor.execute("SELECT * FROM catalog WHERE file = 'XML'")
     for tilescheme in [dict(row) for row in cursor.fetchall()]:
         try:
             if os.path.isfile(os.path.join(project_dir, tilescheme["location"])):
@@ -297,13 +297,13 @@ def get_xml(
             print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: " "Failed to download XML " "possibly due to conflict with an open existing file. " "Please close all files and attempt again")
             sys.exit(1)
         try:
-            os.rename(destination_name, destination_name_renamed)
+            os.replace(destination_name, destination_name_renamed)
         except (OSError, PermissionError) as e:
             print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: " "Failed to rename XML to CATALOG.xml." "possibly due to conflict with an open existing file named CATALOG.XML. " "Please close all files and attempt again")
             sys.exit(1)
     print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {datetime.datetime.now().astimezone().tzname()}] {data_source}: Downloaded {filename_renamed}")
     cursor.execute(
-        """REPLACE INTO catalogue(file, location, downloaded)
+        """REPLACE INTO catalog(file, location, downloaded)
                       VALUES(?, ?, ?)""",
         ("XML", relative, datetime.datetime.now()),
     )
