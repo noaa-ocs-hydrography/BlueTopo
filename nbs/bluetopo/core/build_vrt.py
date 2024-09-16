@@ -14,6 +14,7 @@ gdal.UseExceptions()
 gdal.SetConfigOption("COMPRESS_OVERVIEW", "DEFLATE")
 gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
 
+# refactor duplicate functions
 
 def connect_to_survey_registry_pmn2(project_dir: str, data_source: str) -> sqlite3.Connection:
     """
