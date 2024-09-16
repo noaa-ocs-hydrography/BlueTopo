@@ -875,7 +875,7 @@ def add_vrt_rat_pmn(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_pa
             significant_features=[float, gdal.GFU_Generic],
             feature_size=[str, gdal.GFU_Generic],
             # ?
-            featuresizevar=[int, gdal.GFU_Generic],
+            feature_size_var=[int, gdal.GFU_Generic],
             coverage=[int, gdal.GFU_Generic],
             bathy_coverage=[int, gdal.GFU_Generic],
             horizontal_uncert_fixed=[float, gdal.GFU_Generic],
@@ -885,7 +885,7 @@ def add_vrt_rat_pmn(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_pa
             source_survey_id=[str, gdal.GFU_Generic],
             source_institution=[str, gdal.GFU_Generic],
             # ?
-            bathymetricuncertaintytype=[int, gdal.GFU_Generic],
+            bathymetric_uncertainty_type=[int, gdal.GFU_Generic],
         )
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM tiles WHERE utm = ?", (utm,))
@@ -931,7 +931,8 @@ def add_vrt_rat_pmn(conn: sqlite3.Connection, utm: str, project_dir: str, vrt_pa
             curr = []
             for col in range(rat_n.GetColumnCount()):
                 entry_val = rat_n.GetValueAsString(row, col)
-                if rat_n.GetNameOfCol(col).lower() in ['featuresizevar', 'bathymetricuncertaintytype']:
+                # test removal
+                if rat_n.GetNameOfCol(col).lower() in ['feature_size_var', 'bathymetric_uncertainty_type']:
                     entry_val = 0
                 curr.append(entry_val)
             surveys.append(curr)
